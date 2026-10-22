@@ -1,0 +1,29 @@
+[project]
+name = "bouldering-analysis"
+version = "0.1.0"
+description = "Track which holds a climber uses in a bouldering video."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2",
+    "opencv-contrib-python>=4.10",
+]
+
+[project.scripts]
+beta = "beta.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "beta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: needs the MediaPipe pose model (downloaded on first `beta pose` run)"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
