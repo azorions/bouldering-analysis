@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from types import SimpleNamespace
 
 import cv2
@@ -104,3 +105,19 @@ class FakeLandmarker:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+
+class FakeResponse(io.BytesIO):
+    """Stands in for urllib's HTTP response in download tests. With ``fail_after``,
+    reading past the body raises it, like a connection dropped mid-download."""
+
+    def __init__(self, body: bytes, length: int | str | None = None, fail_after: Exception | None = None) -> None:
+        super().__init__(body)
+        self.headers = {} if length is None else {"Content-Length": str(length)}
+        self.fail_after = fail_after
+
+    def read(self, size: int | None = -1) -> bytes:
+        data = super().read(size)
+        if not data and self.fail_after is not None:
+            raise self.fail_after
+        return data
