@@ -24,6 +24,7 @@ module-name = "beta"
 testpaths = ["tests"]
 markers = ["slow: needs the MediaPipe pose model (downloaded on first `beta pose` run)"]
 # Keep a plain `uv run pytest` offline and fast; run the model tests with `uv run pytest -m slow`.
+# Naming one slow test (tests/test_pose.py::...) still deselects it: use `-m slow -k <name>`.
 addopts = ["-m", "not slow"]
 
 [dependency-groups]

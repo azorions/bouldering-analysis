@@ -14,7 +14,7 @@ uv run pytest
 
 Commands run inside the project environment with `uv run python -m beta ...` (or `uv run beta ...`).
 
-`uv run pytest` skips the tests that need the real pose model. Run those with `uv run pytest -m slow` (downloads the 6 MB lite model to `models/` once). Set `BETA_POSE_CLIP=path/to/clip.mp4` to also check that the model finds the climber in a real video.
+`uv run pytest` skips the tests that need the real pose model. Run those with `uv run pytest -m slow` (downloads the 6 MB lite model to `models/` once), or just one with `uv run pytest -m slow -k <test name>` (naming it as `tests/test_pose.py::<test name>` alone still skips it). Set `BETA_POSE_CLIP=path/to/clip.mp4` to also check that the model finds the climber in a real video.
 
 ## Usage
 
@@ -68,7 +68,7 @@ uv run python -m beta pose clip.mp4
 
 - The model is downloaded to `models/` on the first run. `--model heavy` (default, 31 MB) is the most accurate; `--model lite` (6 MB) is about 4x faster, for quick looks. On a laptop CPU heavy takes about 55 ms per frame, so a one-minute 30 fps clip takes under two minutes. Without internet, download the `.task` file by hand and pass it with `--model-path`.
 - Output goes to the same `outputs/<input name>/` folder:
-  - `pose.json`: per frame, the 33 landmarks as `[x, y, z, visibility, presence]`, or `null` when no climber was found. x and y are pixels in the same coordinates as the hold polygons in `holds.json`. visibility (0 to 1) says how sure MediaPipe is that the point isn't hidden; it still guesses positions for hidden wrists and feet, so treat low-visibility points with suspicion.
+  - `pose.json`: per frame, the 33 landmarks as `[x, y, z, visibility, presence]`, or `null` when no climber was found. x and y are pixels in the same coordinates as the hold polygons in `holds.json`. z is depth relative to the hips, left in MediaPipe's units (fractions of the image width, not pixels) and noisy, since one camera can't measure depth well; `landmark_units` in the file lists the units of each field. visibility (0 to 1) says how sure MediaPipe is that the point isn't hidden; it still guesses positions for hidden wrists and feet, so treat low-visibility points with suspicion.
   - `pose_debug.mp4`: the clip with the skeleton drawn on it. The climber's left side is blue and right side is orange; points with low visibility are drawn faint. If `holds.json` is in the folder, the numbered holds are drawn too.
 - The summary shows how many frames had a pose, the longest run without one, and the mean visibility of each hand (LH, RH) and foot (LF, RF).
 
