@@ -7,6 +7,7 @@ MediaPipe's PoseLandmarker finds one person and returns 33 body landmarks
   to pixels so they line up with the hold polygons in holds.json.
 - z: depth relative to the hips, roughly on the scale of x. A single camera
   can't measure depth well, so it is noisy; it is kept for later milestones.
+  It is left in MediaPipe's units (fractions of the image width), not pixels.
 - visibility: how likely the landmark is visible rather than hidden (behind
   the body, round a volume, ...). MediaPipe still guesses a position for a
   hidden wrist, so the contacts stage should ignore low-visibility points.
@@ -21,6 +22,7 @@ from their index and the fps.
 
 from __future__ import annotations
 
+import http.client
 import os
 import shutil
 import sys
@@ -127,11 +129,17 @@ def download_model(variant: str, path: str | Path) -> Path:
         with urllib.request.urlopen(url, timeout=60) as response, open(part, "wb") as f:
             length = response.headers.get("Content-Length")
             shutil.copyfileobj(response, f)
-        expected = int(length) if length else None
-        if expected is not None and part.stat().st_size != expected:
-            raise OSError(f"got {part.stat().st_size} of {expected} bytes")
+        size = part.stat().st_size
+        if size == 0:
+            raise OSError("the server sent an empty file")
+        # A malformed length (e.g. "5, 5") is treated as unknown rather than as an error.
+        expected = int(length) if length and length.strip().isdigit() else None
+        if expected is not None and size != expected:
+            raise OSError(f"got {size} of {expected} bytes")
         part.replace(path)
-    except OSError as exc:  # URLError and timeouts are OSErrors too
+    # URLError and timeouts are OSErrors; a connection dropped partway through the
+    # body raises http.client.IncompleteRead, which is an HTTPException instead.
+    except (OSError, http.client.HTTPException) as exc:
         part.unlink(missing_ok=True)
         raise ValueError(
             f"could not download the pose model from {url} ({exc}). "
@@ -172,8 +180,11 @@ class Landmarker:
         from mediapipe.tasks.python.vision import PoseLandmarker, PoseLandmarkerOptions, RunningMode
 
         self._image = lambda rgb: Image(image_format=ImageFormat.SRGB, data=rgb)
+        model_bytes = Path(model_path).read_bytes()
+        if not model_bytes:
+            raise ValueError(f"could not load pose model {model_path}: the file is empty")
         options = PoseLandmarkerOptions(
-            base_options=BaseOptions(model_asset_buffer=Path(model_path).read_bytes()),
+            base_options=BaseOptions(model_asset_buffer=model_bytes),
             running_mode=RunningMode.VIDEO,
             num_poses=1,  # bouldering videos have one climber; spotters are usually out of frame
             min_pose_detection_confidence=min_confidence,
@@ -184,10 +195,15 @@ class Landmarker:
             try:
                 with _stderr_fd_to(log):
                     self._landmarker = PoseLandmarker.create_from_options(options)
-            except RuntimeError as exc:
+            # RuntimeError: not a model at all. FileNotFoundError: a .task bundle without
+            # the pose models inside (e.g. MediaPipe's hand model). ValueError: options
+            # MediaPipe rejects.
+            except (RuntimeError, FileNotFoundError, ValueError) as exc:
                 log.seek(0)
                 details = log.read().decode(errors="replace").strip()
-                raise ValueError(f"could not load pose model {model_path}: {exc}\n{details}".strip()) from exc
+                raise ValueError(
+                    f"could not load pose model {model_path} (is it a MediaPipe pose_landmarker .task file?): {exc}\n{details}".strip()
+                ) from exc
 
     def detect(self, frame_bgr: np.ndarray, t_ms: int) -> Sequence[Any] | None:
         """The landmarks of the first person found (MediaPipe objects with x, y, z,
@@ -356,6 +372,7 @@ def pose_to_dict(track: PoseTrack, source: dict[str, Any], params: dict[str, Any
         "params": params,
         "landmark_names": list(LANDMARK_NAMES),
         "landmark_fields": list(LANDMARK_FIELDS),
+        "landmark_units": dict(zip(LANDMARK_FIELDS, ("px", "px", "image widths", "0-1", "0-1"))),
         "frames": [
             {"frame": p.frame, "t_ms": p.t_ms, "landmarks": None if p.landmarks is None else _rounded(p.landmarks)}
             for p in track.frames

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import io
+import http.client
 import os
+import zipfile
 from pathlib import Path
 
 import numpy as np
 import pytest
-from conftest import HIDDEN, STICK, FakeLandmarker
+from conftest import HIDDEN, STICK, FakeLandmarker, FakeResponse
 
 from beta import pose
 from beta.holds import HoldSpec, detect_holds
@@ -25,7 +26,7 @@ from beta.pose import (
     write_pose_video,
 )
 from beta.synthetic import climber_center, make_climb_video, make_wall
-from beta.video import iter_frames, probe
+from beta.video import iter_frames, probe, read_frame
 
 MODELS = Path(__file__).resolve().parents[1] / "models"
 
@@ -129,7 +130,8 @@ def test_draw_pose_without_a_pose_still_labels_the_frame():
     for p in (None, PoseFrame(3, 200, None)):
         img = draw_pose(frame, p)
         assert img.shape == frame.shape
-        assert (img != frame).any()  # "no pose" written on it
+        # The header band darkens the grey frame, so only the text can be this bright.
+        assert (img[:60] > 200).any()
     assert (frame == 120).all()  # the input is not drawn on
 
 
@@ -160,6 +162,26 @@ def test_write_pose_video(climb_video, tmp_path):
     assert info.fps == pytest.approx(15.0)
 
 
+def test_write_pose_video_draws_holds(climb_video, tmp_path):
+    path, _ = climb_video
+    holds = detect_holds(make_wall(640, 480, seed=0)[0], HoldSpec.from_color("green")).holds  # the clip's wall
+    track = PoseTrack(estimate_poses(iter_frames(path), 15.0, FakeLandmarker(31, missing=set(range(31)))), 15.0, 640, 480)
+    plain = read_frame(write_pose_video(path, track, tmp_path / "plain.mp4"), 0)
+    drawn = read_frame(write_pose_video(path, track, tmp_path / "holds.mp4", holds), 0)
+    # The outline (dark, with a thin white line on top) and the number change the
+    # pixels on and around each hold well beyond mp4 compression noise; away from the
+    # holds the two videos match. Holds under the darkened header band change least.
+    changed = np.abs(drawn.astype(int) - plain.astype(int)).max(axis=2) > 40
+    near = np.zeros(changed.shape, bool)
+    for hold in holds:
+        x, y, w, h = hold.bbox
+        box = (slice(max(0, y - 8), y + h + 8), slice(max(0, x - 8), x + w + 8))
+        assert changed[box].any(), f"hold {hold.id} not drawn"
+        near[box] = True
+    assert changed[near].sum() > 1000
+    assert changed[~near].sum() == 0
+
+
 def test_write_pose_video_downscales_to_even_size(tmp_path):
     src = tmp_path / "wide.avi"
     make_climb_video(src, width=1501, height=845, n_frames=3)
@@ -167,12 +189,6 @@ def test_write_pose_video_downscales_to_even_size(tmp_path):
     info = probe(write_pose_video(src, PoseTrack(frames, 15.0, 1501, 845), tmp_path / "out.mp4"))
     assert info.width <= 1280 and info.width % 2 == 0 and info.height % 2 == 0
     assert info.frame_count == 3
-
-
-class FakeResponse(io.BytesIO):
-    def __init__(self, body: bytes, length: int) -> None:
-        super().__init__(body)
-        self.headers = {"Content-Length": str(length)}
 
 
 def test_download_model(tmp_path, monkeypatch):
@@ -189,11 +205,60 @@ def test_truncated_download_leaves_no_file(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_dropped_connection_leaves_no_file(tmp_path, monkeypatch):
+    # A chunked download cut off partway raises IncompleteRead, which is not an OSError.
+    dropped = FakeResponse(b"mod", fail_after=http.client.IncompleteRead(b"mod"))
+    monkeypatch.setattr(pose.urllib.request, "urlopen", lambda url, timeout: dropped)
+    with pytest.raises(ValueError, match="--model-path"):
+        pose.download_model("lite", tmp_path / "pose_landmarker_lite.task")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_empty_download_leaves_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(pose.urllib.request, "urlopen", lambda url, timeout: FakeResponse(b""))
+    with pytest.raises(ValueError, match="empty file"):
+        pose.download_model("lite", tmp_path / "pose_landmarker_lite.task")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_malformed_content_length_is_ignored(tmp_path, monkeypatch):
+    monkeypatch.setattr(pose.urllib.request, "urlopen", lambda url, timeout: FakeResponse(b"model", "5, 5"))
+    assert pose.download_model("lite", tmp_path / "m.task").read_bytes() == b"model"
+
+
 def test_broken_model_file_is_a_clear_error(tmp_path):
     bad = tmp_path / "bad.task"
     bad.write_bytes(b"not a model")
     with pytest.raises(ValueError, match="could not load pose model"):
         pose.open_landmarker(bad)
+
+
+def test_empty_model_file_is_a_clear_error(tmp_path):
+    empty = tmp_path / "empty.task"
+    empty.write_bytes(b"")
+    with pytest.raises(ValueError, match=r"empty\.task: the file is empty"):
+        pose.open_landmarker(empty)
+
+
+def test_model_bundle_without_pose_models_is_a_clear_error(tmp_path):
+    # e.g. MediaPipe's hand landmarker passed with --model-path: a valid .task bundle, wrong models inside
+    bundle = tmp_path / "hand_landmarker.task"
+    with zipfile.ZipFile(bundle, "w") as z:
+        z.writestr("hand_detector.tflite", b"\0" * 64)
+    with pytest.raises(ValueError, match=r"could not load pose model .*hand_landmarker\.task"):
+        pose.open_landmarker(bundle)
+
+
+def test_converts_real_mediapipe_landmarks():
+    # FakeLandmarker returns SimpleNamespace objects; check the real MediaPipe type converts the same way.
+    from mediapipe.tasks.python.components.containers.landmark import NormalizedLandmark
+
+    lms = [NormalizedLandmark(x=0.5, y=0.25, z=-0.1, visibility=0.9, presence=0.8) for _ in range(33)]
+    lms[1] = NormalizedLandmark(x=0.1, y=0.2, z=0.0, visibility=None, presence=None)
+    arr = pose.landmarks_to_array(lms, 640, 480)
+    assert arr.shape == (33, 5)
+    assert tuple(arr[0]) == pytest.approx((320.0, 120.0, -0.1, 0.9, 0.8))
+    assert np.isnan(arr[1, 3]) and np.isnan(arr[1, 4])
 
 
 # --- the real model (uv run pytest -m slow) ---------------------------------
