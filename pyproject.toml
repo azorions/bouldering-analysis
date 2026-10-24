@@ -5,6 +5,7 @@ description = "Track which holds a climber uses in a bouldering video."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "mediapipe>=1.1",
     "numpy>=2",
     "opencv-contrib-python>=4.10",
 ]
@@ -22,6 +23,8 @@ module-name = "beta"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["slow: needs the MediaPipe pose model (downloaded on first `beta pose` run)"]
+# Keep a plain `uv run pytest` offline and fast; run the model tests with `uv run pytest -m slow`.
+addopts = ["-m", "not slow"]
 
 [dependency-groups]
 dev = [
