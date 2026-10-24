@@ -1,7 +1,7 @@
 """Command line interface: ``python -m beta <stage> ...`` (or ``beta <stage> ...``).
 
 Each stage reads and writes files in ``outputs/<input name>/`` so it can be
-rerun on its own. Milestone 1 stages so far: ``holds``.
+rerun on its own. Milestone 1 stages so far: ``holds``, ``pose``.
 """
 
 from __future__ import annotations
@@ -18,10 +18,22 @@ from beta.holds import (
     HoldSpec,
     detect_holds,
     draw_holds_debug,
+    load_holds,
     sample_hsv,
     save_holds,
 )
-from beta.video import imwrite, is_image, load_input
+from beta.pose import (
+    MODEL_SIZES_MB,
+    MODEL_VARIANTS,
+    PoseTrack,
+    download_model,
+    estimate_poses,
+    model_file,
+    open_landmarker,
+    save_pose,
+    write_pose_video,
+)
+from beta.video import UNSUPPORTED_PHOTO_EXTS, imwrite, is_image, iter_frames, load_input, probe
 
 
 def _ints(text: str, count: int, shape: str) -> tuple[int, ...]:
@@ -41,6 +53,16 @@ def hsv_arg(text: str) -> tuple[int, int, int]:
 
 def xy_arg(text: str) -> tuple[int, int]:
     return _ints(text, 2, "X,Y")  # type: ignore[return-value]
+
+
+def unit_arg(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        value = -1.0
+    if not 0.0 <= value <= 1.0:
+        raise argparse.ArgumentTypeError(f"expected a number from 0 to 1, got {text!r}")
+    return value
 
 
 def roi_arg(text: str) -> tuple[int, int, int, int]:
@@ -137,6 +159,97 @@ def cmd_holds(args: argparse.Namespace) -> int:
     return 0
 
 
+def _progress(total: int):
+    """A frame counter on the terminal; nothing when output is redirected (logs, tests)."""
+    if not sys.stderr.isatty():
+        return None
+
+    def report(done: int) -> None:
+        if done % 10 == 0 or done == total:
+            print(f"\r  frame {done}/{total}", end="", file=sys.stderr, flush=True)
+
+    return report
+
+
+def cmd_pose(args: argparse.Namespace) -> int:
+    path: Path = args.input
+    if is_image(path) or path.suffix.lower() in UNSUPPORTED_PHOTO_EXTS:
+        raise ValueError(f"{path.name} is a photo: pose needs a video of the climb")
+    info = probe(path)
+    out_dir = args.out or default_out_dir(path)
+
+    if args.model_path is not None:
+        model = args.model_path
+        if not model.is_file():
+            raise FileNotFoundError(f"no such model file: {model}")
+    else:
+        model = model_file(args.model)
+        if not model.is_file():
+            print(f"Downloading the {args.model} pose model (~{MODEL_SIZES_MB[args.model]} MB) to {model} ...")
+            download_model(args.model, model)
+
+    # Holds are only drawn on the debug video; check them before the slow part.
+    holds_path = args.holds or out_dir / "holds.json"
+    holds = []
+    if args.holds is not None or holds_path.is_file():
+        holds, doc = load_holds(holds_path)
+        size = (doc["source"]["width"], doc["source"]["height"])
+        if size != (info.width, info.height):
+            print(
+                f"warning: {holds_path} was made from a {size[0]}x{size[1]} image but the video is "
+                f"{info.width}x{info.height}, so its holds are not drawn",
+                file=sys.stderr,
+            )
+            holds = []
+
+    name = model.name if args.model_path is not None else f"{args.model} model"
+    print(f"Finding the climber's pose in {info.frame_count} frames of {path.name} ({name}) ...")
+    with open_landmarker(model, args.min_confidence) as landmarker:
+        frames = estimate_poses(iter_frames(path), info.fps, landmarker, _progress(info.frame_count))
+    if sys.stderr.isatty():
+        print(file=sys.stderr)
+    if not frames:
+        raise ValueError(f"could not read any frames from {path}")
+    track = PoseTrack(frames, info.fps, info.width, info.height)
+
+    source = {
+        "path": path,
+        "kind": "video",
+        "fps": info.fps,
+        "frame_count": len(frames),
+        "width": info.width,
+        "height": info.height,
+        "bit_depth": info.bit_depth,
+    }
+    params = {
+        "model": None if args.model_path is not None else args.model,
+        "model_file": model,
+        "min_confidence": args.min_confidence,
+        "running_mode": "video",
+        "num_poses": 1,
+    }
+    written = [save_pose(out_dir / "pose.json", track, source, params)]
+    if not args.no_video:
+        written.append(write_pose_video(path, track, out_dir / "pose_debug.mp4", holds))
+
+    found = track.detected()
+    print(f"Pose found in {found} of {len(frames)} frames ({100 * found / len(frames):.0f}%)")
+    if found == 0:
+        print(f"  Is the whole climber in frame? A lower --min-confidence (now {args.min_confidence:g}) may help.")
+    else:
+        gap, start = track.longest_gap()
+        if gap:
+            print(f"  longest run without a pose: {gap} frame{'' if gap == 1 else 's'} ({gap / info.fps:.1f} s) from frame {start}")
+        vis = track.mean_visibility()
+        print("  mean visibility (0-1): " + "  ".join(f"{k} {'-' if v is None else f'{v:.2f}'}" for k, v in vis.items()))
+    if holds and not args.no_video:
+        print(f"  {len(holds)} holds from {holds_path} drawn on the video")
+    print("Wrote:")
+    for p in written:
+        print(f"  {p}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="beta", description="Bouldering beta tracker: which holds does the climber use?")
     sub = parser.add_subparsers(dest="command", required=True, metavar="<stage>")
@@ -168,6 +281,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--out", type=Path, metavar="DIR", help="output directory (default: outputs/<input name>)")
     p.set_defaults(func=cmd_holds)
+
+    p = sub.add_parser(
+        "pose",
+        help="find the climber's body pose in every frame",
+        description=(
+            "Run MediaPipe Pose on every frame of a video. Writes pose.json (33 body landmarks per frame, in "
+            "pixels) and pose_debug.mp4 (the skeleton drawn on the clip, with the holds from holds.json when "
+            "the output directory has one). The model is downloaded to models/ on first use."
+        ),
+    )
+    p.add_argument("input", type=Path, help="video of the climb, from a static camera")
+    p.add_argument("--model", choices=MODEL_VARIANTS, default="heavy", help="model size: lite is fastest, heavy is most accurate (default: %(default)s)")
+    p.add_argument("--model-path", type=Path, metavar="FILE", help="use this .task model file instead of downloading one")
+    p.add_argument("--min-confidence", type=unit_arg, default=0.5, metavar="C", help="MediaPipe's detection, presence and tracking thresholds, 0 to 1 (default: %(default)s)")
+    p.add_argument("--holds", type=Path, metavar="FILE", help="holds.json to draw on the video (default: holds.json in the output directory, if there is one)")
+    p.add_argument("--no-video", action="store_true", help="only write pose.json, skip pose_debug.mp4")
+    p.add_argument("--out", type=Path, metavar="DIR", help="output directory (default: outputs/<input name>)")
+    p.set_defaults(func=cmd_pose)
 
     return parser
 
