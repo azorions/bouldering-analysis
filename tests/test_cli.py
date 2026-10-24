@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from dataclasses import replace
 from urllib.error import URLError
 
 import pytest
-from conftest import FOOT_CHIPS, FakeLandmarker, foot_chip_wall
+from conftest import FOOT_CHIPS, FakeLandmarker, FakeResponse, foot_chip_wall
 
 from beta import cli, pose, video
 from beta.cli import main
+from beta.holds import load_holds
 from beta.jsonio import load_json
 from beta.pose import load_pose
 from beta.video import imread, imwrite, probe
@@ -100,6 +102,20 @@ def test_python_dash_m_entry_point():
     assert "--color" in result.stdout
 
 
+def test_non_ascii_names_print_when_output_is_piped(wall, tmp_path):
+    # Windows encodes piped or redirected output as cp1252, which has no Japanese characters.
+    src = imwrite(tmp_path / "クライム.png", wall[0])
+    result = subprocess.run(
+        [sys.executable, "-m", "beta", "holds", str(src), "--color", "green"],
+        cwd=tmp_path,  # output goes to outputs/クライム/, which is printed
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "クライム".encode("ascii", "backslashreplace").decode() in result.stdout  # printed as \u escapes
+
+
 def test_importing_the_cli_does_not_load_mediapipe():
     # MediaPipe takes a couple of seconds to import; `beta holds` shouldn't pay for it.
     code = "import sys, beta.cli; print('mediapipe' in sys.modules)"
@@ -135,8 +151,8 @@ def test_pose_writes_json_and_debug_video(climb_video, tmp_path, fake_model, cap
     assert opened[0].closed
 
     printed = capsys.readouterr().out
-    assert "Pose found in 30 of 31 frames (97%)" in printed
-    assert "longest run without a pose: 1 frame (0.1 s) from frame 5" in printed
+    assert "Pose found in 30 of 31 frames (96%)" in printed
+    assert "longest run without a pose: 1 frame (0.07 s) from frame 5" in printed
     assert "LF 0.20" in printed  # the fake's hidden foot
     assert "drawn on the video" not in printed  # no holds.json in out/
 
@@ -149,12 +165,28 @@ def test_pose_no_video(climb_video, tmp_path, fake_model):
     assert (out / "pose.json").is_file() and not (out / "pose_debug.mp4").exists()
 
 
-def test_pose_draws_holds_from_the_output_dir(climb_video, tmp_path, fake_model, capsys):
+def test_pose_no_video_ignores_holds(climb_video, tmp_path, fake_model, capsys):
+    path, _ = climb_video
+    model, _ = fake_model
+    args = ["pose", str(path), "--model-path", str(model), "--out", str(tmp_path / "out"), "--no-video"]
+    assert main([*args, "--holds", str(tmp_path / "missing.json")]) == 0  # not even checked
+    assert "--holds is ignored with --no-video" in capsys.readouterr().err
+
+
+def test_pose_draws_holds_from_the_output_dir(climb_video, tmp_path, fake_model, monkeypatch, capsys):
     path, truth = climb_video
     model, _ = fake_model
     out = tmp_path / "out"
     assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    drawn = []
+
+    def write_video(src, track, out_path, holds=()):
+        drawn.extend(holds)
+        return out_path
+
+    monkeypatch.setattr(cli, "write_pose_video", write_video)
     assert main(["pose", str(path), "--model-path", str(model), "--out", str(out)]) == 0
+    assert drawn == load_holds(out / "holds.json")[0]  # the holds themselves reach the video, not just the message
     n = len(truth.of_color("green"))
     assert f"{n} holds from {out / 'holds.json'} drawn on the video" in capsys.readouterr().out
 
@@ -175,7 +207,10 @@ def test_pose_skips_holds_from_an_image_of_another_size(climb_video, wall, tmp_p
 def test_pose_rejects_photos_and_bad_options(tmp_path, capsys):
     assert main(["pose", str(tmp_path / "wall.png")]) == 1
     assert "pose needs a video" in capsys.readouterr().err
-    assert main(["pose", str(tmp_path / "IMG_0001.HEIC")]) == 1
+    heic = tmp_path / "IMG_0001.HEIC"  # a real file, so the error can't be "no such file"
+    heic.write_bytes(b"\0" * 64)
+    assert main(["pose", str(heic)]) == 1
+    assert "IMG_0001.HEIC is a photo" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         main(["pose", "clip.mp4", "--min-confidence", "1.5"])
     with pytest.raises(SystemExit):
@@ -184,8 +219,43 @@ def test_pose_rejects_photos_and_bad_options(tmp_path, capsys):
 
 def test_pose_missing_model_path(climb_video, tmp_path, capsys):
     path, _ = climb_video
-    assert main(["pose", str(path), "--model-path", str(tmp_path / "nope.task")]) == 1
+    assert main(["pose", str(path), "--model-path", str(tmp_path / "nope.task"), "--out", str(tmp_path / "out")]) == 1
     assert "no such model file" in capsys.readouterr().err
+
+
+def test_pose_checks_options_before_the_pose_pass(climb_video, tmp_path, fake_model, capsys):
+    path, _ = climb_video
+    model, opened = fake_model
+    run = ["pose", str(path), "--model-path", str(model)]
+    out_file = tmp_path / "out.txt"
+    out_file.write_text("")
+    assert main([*run, "--out", str(out_file)]) == 1
+    assert "out.txt is a file" in capsys.readouterr().err
+
+    out = tmp_path / "out"
+    assert main([*run, "--out", str(out), "--holds", str(tmp_path)]) == 1  # a folder
+    assert "no such holds file" in capsys.readouterr().err
+    not_json = tmp_path / "holds.json"
+    not_json.write_text("{not json")
+    other_json = tmp_path / "pose.json"
+    other_json.write_text('{"frames": []}')
+    for bad in (not_json, other_json):
+        assert main([*run, "--out", str(out), "--holds", str(bad)]) == 1
+        assert "is not a holds.json written by `beta holds`" in capsys.readouterr().err
+    assert not opened  # none of them got as far as the model
+
+
+def test_pose_downloads_again_over_an_empty_model(climb_video, tmp_path, fake_model, monkeypatch, capsys):
+    # An empty model file is what an interrupted download used to leave behind.
+    path, _ = climb_video
+    monkeypatch.chdir(tmp_path)  # models/ is relative to the working directory
+    cached = pose.model_file("lite")
+    cached.parent.mkdir()
+    cached.write_bytes(b"")
+    monkeypatch.setattr(pose.urllib.request, "urlopen", lambda url, timeout: FakeResponse(b"model", 5))
+    assert main(["pose", str(path), "--model", "lite", "--no-video"]) == 0
+    assert "Downloading the lite pose model" in capsys.readouterr().out
+    assert cached.read_bytes() == b"model"
 
 
 def test_pose_download_failure_is_a_clear_error(climb_video, tmp_path, monkeypatch, capsys):

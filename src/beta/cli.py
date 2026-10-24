@@ -171,12 +171,33 @@ def _progress(total: int):
     return report
 
 
+def _overlay_holds(path: Path, width: int, height: int) -> list:
+    """The holds in ``path`` to draw on the debug video, or none (with a warning)
+    if they come from an image of a different size than the video."""
+    try:
+        holds, doc = load_holds(path)
+        size = (doc["source"]["width"], doc["source"]["height"])
+    except (KeyError, TypeError, ValueError) as exc:  # another JSON file, a hand edit gone wrong, an old format
+        raise ValueError(f"{path} is not a holds.json written by `beta holds` ({exc})") from exc
+    if size != (width, height):
+        print(
+            f"warning: {path} was made from a {size[0]}x{size[1]} image but the video is "
+            f"{width}x{height}, so its holds are not drawn",
+            file=sys.stderr,
+        )
+        return []
+    return holds
+
+
 def cmd_pose(args: argparse.Namespace) -> int:
     path: Path = args.input
     if is_image(path) or path.suffix.lower() in UNSUPPORTED_PHOTO_EXTS:
         raise ValueError(f"{path.name} is a photo: pose needs a video of the climb")
     info = probe(path)
+    # Everything that can fail on bad options is checked before the slow pose pass.
     out_dir = args.out or default_out_dir(path)
+    if out_dir.exists() and not out_dir.is_dir():
+        raise ValueError(f"output folder {out_dir} is a file")
 
     if args.model_path is not None:
         model = args.model_path
@@ -184,23 +205,21 @@ def cmd_pose(args: argparse.Namespace) -> int:
             raise FileNotFoundError(f"no such model file: {model}")
     else:
         model = model_file(args.model)
-        if not model.is_file():
+        if not model.is_file() or model.stat().st_size == 0:  # an empty file is a failed earlier download
             print(f"Downloading the {args.model} pose model (~{MODEL_SIZES_MB[args.model]} MB) to {model} ...")
             download_model(args.model, model)
 
-    # Holds are only drawn on the debug video; check them before the slow part.
+    # Holds are only drawn on the debug video.
     holds_path = args.holds or out_dir / "holds.json"
     holds = []
-    if args.holds is not None or holds_path.is_file():
-        holds, doc = load_holds(holds_path)
-        size = (doc["source"]["width"], doc["source"]["height"])
-        if size != (info.width, info.height):
-            print(
-                f"warning: {holds_path} was made from a {size[0]}x{size[1]} image but the video is "
-                f"{info.width}x{info.height}, so its holds are not drawn",
-                file=sys.stderr,
-            )
-            holds = []
+    if args.no_video:
+        if args.holds is not None:
+            print("warning: --holds is ignored with --no-video", file=sys.stderr)
+    elif args.holds is not None and not args.holds.is_file():
+        raise FileNotFoundError(f"no such holds file: {args.holds}")
+    elif holds_path.is_file():
+        holds = _overlay_holds(holds_path, info.width, info.height)
+    out_dir.mkdir(parents=True, exist_ok=True)  # e.g. no write permission: fail now, not after the pose pass
 
     name = model.name if args.model_path is not None else f"{args.model} model"
     print(f"Finding the climber's pose in {info.frame_count} frames of {path.name} ({name}) ...")
@@ -233,16 +252,17 @@ def cmd_pose(args: argparse.Namespace) -> int:
         written.append(write_pose_video(path, track, out_dir / "pose_debug.mp4", holds))
 
     found = track.detected()
-    print(f"Pose found in {found} of {len(frames)} frames ({100 * found / len(frames):.0f}%)")
+    # Rounded down, so a clip with a missed frame never shows 100%.
+    print(f"Pose found in {found} of {len(frames)} frames ({100 * found // len(frames)}%)")
     if found == 0:
         print(f"  Is the whole climber in frame? A lower --min-confidence (now {args.min_confidence:g}) may help.")
     else:
         gap, start = track.longest_gap()
         if gap:
-            print(f"  longest run without a pose: {gap} frame{'' if gap == 1 else 's'} ({gap / info.fps:.1f} s) from frame {start}")
+            print(f"  longest run without a pose: {gap} frame{'' if gap == 1 else 's'} ({gap / info.fps:.2f} s) from frame {start}")
         vis = track.mean_visibility()
         print("  mean visibility (0-1): " + "  ".join(f"{k} {'-' if v is None else f'{v:.2f}'}" for k, v in vis.items()))
-    if holds and not args.no_video:
+    if holds:
         print(f"  {len(holds)} holds from {holds_path} drawn on the video")
     print("Wrote:")
     for p in written:
@@ -309,12 +329,16 @@ def _print_warning(message, category, filename, lineno, file=None, line=None) ->
 
 
 def main(argv: list[str] | None = None) -> int:
+    # On Windows, output redirected to a file or pipe is encoded as cp1252, which
+    # can't hold e.g. a Japanese file name. Print a \u escape instead of crashing.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
     args = build_parser().parse_args(argv)
     with warnings.catch_warnings():
         warnings.simplefilter("always")
         warnings.showwarning = _print_warning
         try:
             return args.func(args)
-        except (FileNotFoundError, ValueError, IndexError) as exc:
+        except (OSError, ValueError, IndexError) as exc:  # OSError includes FileNotFoundError and PermissionError
             print(f"error: {exc}", file=sys.stderr)
             return 1
