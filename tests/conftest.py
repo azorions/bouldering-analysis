@@ -8,7 +8,16 @@ import numpy as np
 import pytest
 
 from beta.holds import Hold
-from beta.synthetic import HOLD_HSV, TrueHold, WallTruth, climber_center, hsv_to_bgr, make_climb_video, make_wall
+from beta.synthetic import (
+    HOLD_HSV,
+    TrueHold,
+    WallTruth,
+    climber_center,
+    hsv_to_bgr,
+    make_climb_video,
+    make_moving_climb_video,
+    make_wall,
+)
 
 
 @pytest.fixture(scope="session")
@@ -20,6 +29,14 @@ def wall() -> tuple[np.ndarray, WallTruth]:
 def climb_video(tmp_path_factory: pytest.TempPathFactory):
     path = tmp_path_factory.mktemp("video") / "climb.avi"
     truth = make_climb_video(path, width=640, height=480, n_frames=31, fps=15.0)
+    return path, truth
+
+
+@pytest.fixture(scope="session")
+def moving_video(tmp_path_factory: pytest.TempPathFactory):
+    """The synthetic climb filmed by a handheld phone that pans up and back down."""
+    path = tmp_path_factory.mktemp("moving") / "moving.avi"
+    truth = make_moving_climb_video(path, width=640, height=480, n_frames=45, fps=15.0)
     return path, truth
 
 

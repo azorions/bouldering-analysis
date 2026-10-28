@@ -5,7 +5,20 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from beta.align import CameraTrack, FrameTransform, apply_h, camera_id, corner_shift, load_camera, save_camera
+from beta.align import (
+    STILL_TOL_PX,
+    CameraTrack,
+    FrameTransform,
+    apply_h,
+    camera_id,
+    check_still,
+    corner_shift,
+    estimate_camera,
+    load_camera,
+    save_camera,
+)
+from beta.synthetic import make_moving_climb_video
+from beta.video import probe
 
 
 def shift(dx: float, dy: float) -> np.ndarray:
@@ -66,3 +79,77 @@ def test_camera_json_round_trip_keeps_the_id(tmp_path):
     assert camera_id(replace(cam, reference_frame=1)) != cam.id
     still, _ = load_camera(save_camera(tmp_path / "still.json", CameraTrack.still(30.0, 5, 640, 480), {"path": "c.mp4"}))
     assert still.mode == "still" and np.array_equal(still.frame_to_wall(4), np.eye(3))
+
+
+# --- estimating the camera movement ------------------------------------------
+
+
+def frame_errors(cam: CameraTrack, truth, frames=None) -> list[float]:
+    """Median px error per frame: big-wall points seen in every frame should land on the same wall
+    coordinates whichever frame they are mapped from."""
+    h_big, w_big = truth.wall.height, truth.wall.width
+    ys, xs = np.mgrid[0.45 * h_big : 0.55 * h_big : 8j, 0.2 * w_big : 0.8 * w_big : 8j]
+    grid = np.column_stack([xs.ravel(), ys.ravel()])
+    ref = cam.reference_frame
+    want = apply_h(cam.frame_to_wall(ref), apply_h(truth.wall_to_frame[ref], grid))
+    out = []
+    for t in range(cam.frame_count) if frames is None else frames:
+        w = cam.frame_to_wall(t)
+        if w is not None:
+            got = apply_h(w, apply_h(truth.wall_to_frame[t], grid))
+            out.append(float(np.median(np.linalg.norm(got - want, axis=1))))
+    return out
+
+
+def test_still_clip_is_detected_as_still(climb_video):
+    cam = estimate_camera(climb_video[0])
+    assert cam.mode == "still" and cam.transforms == () and cam.canvas == (640, 480)
+    assert cam.summary["max_shift_px"] < STILL_TOL_PX
+
+
+def test_check_still_reports_motion(moving_video):
+    path, _ = moving_video
+    check = check_still(path, probe(path))
+    assert not check.still and check.max_shift_px > 20 and check.matched >= 6  # of the 8 samples besides the hub
+
+
+def test_moving_clip_lines_up_with_the_wall(moving_video):
+    path, truth = moving_video
+    cam = estimate_camera(path)
+    assert cam.mode == "moving" and cam.frame_count == len(cam.transforms) == 45
+    assert all(t.matrix is not None for t in cam.transforms)
+    assert max(frame_errors(cam, truth)) <= 1.0
+
+
+def test_anchors_about_once_a_second(moving_video):
+    cam = estimate_camera(moving_video[0])
+    anchors = [t.frame for t in cam.transforms if t.method == "anchor"]
+    assert anchors[0] == 0 and all(b - a <= 15 for a, b in zip(anchors, anchors[1:]))  # 15 fps
+    assert sum(t.method == "track" for t in cam.transforms) > len(anchors)
+
+
+def test_drift_stays_bounded_over_a_long_clip(tmp_path):
+    truth = make_moving_climb_video(tmp_path / "long.avi", 320, 240, n_frames=600, fps=30.0)
+    cam = estimate_camera(tmp_path / "long.avi")
+    assert max(frame_errors(cam, truth)) <= 1.0
+    assert cam.summary["anchor_correction_px"]["max"] <= 2.0
+
+
+def test_blank_frames_are_lost_and_alignment_recovers(tmp_path):
+    truth = make_moving_climb_video(tmp_path / "gap.avi", blank_frames=range(20, 24))
+    cam = estimate_camera(tmp_path / "gap.avi")
+    lost = [t for t in cam.transforms if t.matrix is None]
+    assert [t.frame for t in lost] == [20, 21, 22, 23] and {t.method for t in lost} == {"lost"}
+    assert cam.summary["lost_frames"] == 4 and cam.summary["longest_lost_run"] == [4, 20]
+    assert max(frame_errors(cam, truth, range(24, 45))) <= 1.0
+
+
+def test_a_big_climber_does_not_pull_the_alignment(tmp_path):
+    truth = make_moving_climb_video(tmp_path / "big.avi", climber_frac=2.5)
+    assert max(frame_errors(estimate_camera(tmp_path / "big.avi"), truth)) <= 1.0
+
+
+def test_alignment_scales_back_from_working_size(tmp_path):  # Review Focus 3
+    truth = make_moving_climb_video(tmp_path / "hd.avi", 1600, 1200, n_frames=20)
+    cam = estimate_camera(tmp_path / "hd.avi")
+    assert cam.canvas[0] >= 1600 and max(frame_errors(cam, truth)) <= 1.5  # 1 working px is ~1.6 full-res px
