@@ -12,6 +12,7 @@ made in those fractions, so one seed renders the same scene at any resolution.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -220,12 +221,116 @@ def make_climb_video(
     try:
         for i in range(n_frames):
             frame = wall.copy()
-            cx, cy = climber_center(i, n_frames, width, height)
-            ax, ay = round(0.06 * width), round(0.10 * height)
-            cv2.ellipse(frame, (cx, cy), (ax, ay), 0, 0, 360, hsv_to_bgr(HOLD_HSV["green"]), -1, cv2.LINE_AA)
-            cv2.circle(frame, (cx, cy - ay - round(0.04 * height)), round(0.035 * height), (120, 160, 210), -1, cv2.LINE_AA)
-            frame[:12, :12] = min(255, 8 * i)
+            _draw_climber(frame, i, n_frames)
             writer.write(frame)
     finally:
         writer.release()
     return truth
+
+
+def _draw_climber(frame: np.ndarray, i: int, n_frames: int, size: float = 1.0) -> None:
+    """The fake climber (a route-colored body and a head) plus the frame-number marker square."""
+    height, width = frame.shape[:2]
+    cx, cy = climber_center(i, n_frames, width, height)
+    ax, ay = round(0.06 * width * size), round(0.10 * height * size)
+    cv2.ellipse(frame, (cx, cy), (ax, ay), 0, 0, 360, hsv_to_bgr(HOLD_HSV["green"]), -1, cv2.LINE_AA)
+    cv2.circle(frame, (cx, cy - ay - round(0.04 * height * size)), round(0.035 * height * size), (120, 160, 210), -1, cv2.LINE_AA)
+    frame[:12, :12] = min(255, 8 * i)
+
+
+def add_wall_texture(image: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Grey scuffs, chalk dots and screw holes over the bare wall (not on the holds).
+
+    A real gym wall is covered in these, and they are what camera alignment
+    locks on to: the plain synthetic wall gives a 640x480 frame only ~200
+    feature points, too few to align by. They are colorless, so they don't
+    change which pixels count as a hold color.
+    """
+    height, width = image.shape[:2]
+    d = min(height, width)
+    layer = image.copy()
+    for _ in range(round(width * height / 150)):
+        x, y = int(rng.integers(0, width)), int(rng.integers(0, height))
+        r = max(1, round(rng.uniform(0.002, 0.009) * d))
+        v = int(rng.choice([rng.integers(40, 90), rng.integers(170, 230)]))  # dark holes or light chalk
+        if rng.random() < 0.7:
+            cv2.circle(layer, (x, y), r, (v, v, v), -1, cv2.LINE_AA)
+        else:
+            angle = rng.uniform(0, math.pi)
+            dx, dy = round(3 * r * math.cos(angle)), round(3 * r * math.sin(angle))
+            cv2.line(layer, (x - dx, y - dy), (x + dx, y + dy), (v, v, v), max(1, r // 2), cv2.LINE_AA)
+    # Keep the holds (anything colorful) and a thin rim around them as they were.
+    sat = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)[..., 1]
+    colorful = cv2.dilate((sat > 40).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    return np.where(colorful[..., None], image, layer)
+
+
+@dataclass
+class MovingTruth:
+    wall: WallTruth  # the big wall the camera looks at
+    wall_to_frame: list[np.ndarray]  # per frame: 3x3 from big-wall px to that frame's px (the true camera)
+
+
+def camera_view(i: int, n_frames: int, width: int, height: int, wall_size: tuple[int, int], margin: int, tilt_frac: float) -> np.ndarray:
+    """3x3 from big-wall px to frame px for frame ``i``: a handheld phone following a climber.
+
+    The view pans up the wall by up to ``tilt_frac`` of the frame height and
+    back down, rolls by up to 1.5 degrees and zooms by up to 4%, all smoothly,
+    like the first real clip.
+    """
+    s = i / max(1, n_frames - 1)
+    pan = tilt_frac * height * math.sin(math.pi * s)
+    angle = 1.5 * math.sin(2 * math.pi * s)
+    zoom = 1 + 0.04 * math.sin(math.pi * s)
+    # The wall point at the middle of the view: starts at the bottom of the big wall and moves up by `pan`.
+    cx, cy = wall_size[0] / 2, wall_size[1] - margin - 1 - height / 2 - pan
+    m = cv2.getRotationMatrix2D((cx, cy), angle, zoom)  # rotate and zoom about that point (it stays put)
+    m[:, 2] += (width / 2 - cx, height / 2 - cy)  # then move it to the middle of the frame
+    return np.vstack([m, [0.0, 0.0, 1.0]])
+
+
+def make_moving_climb_video(
+    path: str | Path,
+    width: int = 640,
+    height: int = 480,
+    n_frames: int = 45,
+    fps: float = 15.0,
+    seed: int = 0,
+    tilt_frac: float = 0.2,
+    blank_frames: range | tuple[int, ...] = (),
+    climber_frac: float = 1.0,
+) -> MovingTruth:
+    """Like :func:`make_climb_video`, but filmed by a handheld phone that follows the climber.
+
+    The camera looks at a wall taller than the frame (see :func:`camera_view`),
+    so the true frame-to-wall transform of every frame is known. Frames in
+    ``blank_frames`` are plain grey, like a hand over the lens, so alignment
+    must mark them lost. ``climber_frac`` scales the climber, to check that a
+    big moving body doesn't drag the alignment along with it.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A margin around the area the view sweeps, so rotated corners never see past the wall's edge.
+    margin = math.ceil(0.04 * max(width, height)) + 2
+    inner_height = round(height * (1 + tilt_frac)) + 2
+    wall, truth = make_wall(width + 2 * margin, inner_height + 2 * margin, seed)
+    rng = np.random.default_rng(seed + 1)
+    wall = add_wall_texture(wall, rng)
+    blank = set(blank_frames)
+    views = [camera_view(i, n_frames, width, height, (truth.width, truth.height), margin, tilt_frac) for i in range(n_frames)]
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), fps, (width, height))
+    if not writer.isOpened():
+        raise RuntimeError(f"OpenCV could not open a video writer for {path}")
+    try:
+        for i, view in enumerate(views):
+            if i in blank:
+                writer.write(np.full((height, width, 3), 125, np.uint8))
+                continue
+            frame = cv2.warpPerspective(wall, view, (width, height), flags=cv2.INTER_LINEAR)
+            # Fresh sensor noise every frame, unlike the wall's own texture, which moves with the wall.
+            frame = np.clip(frame + rng.normal(0, 2, frame.shape), 0, 255).astype(np.uint8)
+            _draw_climber(frame, i, n_frames, climber_frac)
+            writer.write(frame)
+    finally:
+        writer.release()
+    return MovingTruth(truth, views)
