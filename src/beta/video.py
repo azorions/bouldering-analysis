@@ -8,7 +8,7 @@ moves, so the per-pixel median over many frames is an image of the empty wall.
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -156,6 +156,34 @@ def read_frame(path: str | Path, index: int) -> np.ndarray:
     if not ok:
         raise IndexError(f"could not read frame {index} of {path}")
     return frame
+
+
+def read_frames(path: str | Path, indices: Iterable[int]) -> list[tuple[int, np.ndarray]]:
+    """Read the frames at ``indices`` by reading the clip from the start, never seeking.
+
+    Slower than :func:`read_frame` for a frame near the end, but frame ``i`` is
+    exactly what :func:`iter_frames` calls frame ``i``, even on variable-frame-rate
+    phone video. Anything that pairs a frame with that frame's camera transform
+    needs this. Returns ``(index, frame_bgr)`` in increasing index order; indices
+    past the end are skipped (the header frame count can overshoot).
+    """
+    wanted = {int(i) for i in indices if i >= 0}
+    if not wanted:
+        return []
+    out = []
+    cap = _open(path)
+    try:
+        for i in range(max(wanted) + 1):
+            # grab() moves on without converting the frame to BGR; retrieve() only for the wanted ones.
+            if not cap.grab():
+                break
+            if i in wanted:
+                ok, frame = cap.retrieve()
+                if ok:
+                    out.append((i, frame))
+    finally:
+        cap.release()
+    return out
 
 
 def sample_indices(frame_count: int, n: int) -> list[int]:

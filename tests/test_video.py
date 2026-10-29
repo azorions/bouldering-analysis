@@ -19,6 +19,7 @@ from beta.video import (
     median_background,
     probe,
     read_frame,
+    read_frames,
     sample_indices,
 )
 
@@ -45,6 +46,12 @@ def test_read_frame_out_of_range(climb_video):
     path, _ = climb_video
     with pytest.raises(IndexError):
         read_frame(path, 500)
+
+
+def test_read_frames_returns_exact_indices(climb_video):  # Review Focus 1
+    frames = read_frames(climb_video[0], [30, 0, 7, 99])
+    assert [i for i, _ in frames] == [0, 7, 30]
+    assert [round(float(f[:12, :12].mean())) for _, f in frames] == pytest.approx([0, 56, 240], abs=4)
 
 
 def test_iter_frames_is_sequential(climb_video):

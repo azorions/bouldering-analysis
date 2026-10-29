@@ -10,6 +10,7 @@ import pytest
 from conftest import FOOT_CHIPS, FakeLandmarker, FakeResponse, foot_chip_wall
 
 from beta import cli, pose, video
+from beta.align import load_camera
 from beta.cli import main
 from beta.holds import load_holds
 from beta.jsonio import load_json
@@ -271,3 +272,29 @@ def test_pose_download_failure_is_a_clear_error(climb_video, tmp_path, monkeypat
     assert "Downloading the lite pose model" in captured.out
     assert "could not download the pose model" in captured.err and "--model-path" in captured.err
     assert list((tmp_path / "models").iterdir()) == []
+
+
+def test_align_on_still_clip(climb_video, tmp_path, capsys):
+    out = tmp_path / "out"
+    assert main(["align", str(climb_video[0]), "--out", str(out)]) == 0
+    assert load_camera(out / "camera.json")[0].mode == "still"
+    assert not (out / "align_debug.mp4").exists()
+    assert "Camera is still" in capsys.readouterr().out
+
+
+def test_align_on_moving_clip_writes_debug_video(moving_video, tmp_path, capsys):
+    out = tmp_path / "out"
+    assert main(["align", str(moving_video[0]), "--out", str(out)]) == 0
+    assert probe(out / "align_debug.mp4").frame_count == 45
+    printed = capsys.readouterr().out
+    assert "Camera moves: up to" in printed and "Aligned 45 of 45 frames" in printed and "ms per frame" in printed
+
+
+def test_align_no_video_and_bad_options(moving_video, tmp_path, capsys):
+    out = tmp_path / "out"
+    assert main(["align", str(moving_video[0]), "--out", str(out), "--no-video"]) == 0
+    assert (out / "camera.json").is_file() and not (out / "align_debug.mp4").exists()
+    assert main(["align", str(tmp_path / "wall.png")]) == 1
+    assert "align needs a video" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        main(["align", "clip.mp4", "--anchor-every", "0"])

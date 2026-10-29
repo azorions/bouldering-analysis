@@ -57,6 +57,26 @@ uv run python -m beta holds samples/synthetic_wall.png --color green
 uv run python -m beta holds samples/synthetic_climb.avi --color green
 ```
 
+### Camera movement
+
+Friends usually film by holding the phone, and the phone tilts to follow the climber. `beta align` works out how the camera moved, so every frame can be mapped onto one fixed view of the wall (**wall coordinates**). Holds are found in wall coordinates, so their outlines stay on the real holds while the view moves.
+
+```
+uv run python -m beta align clip.mp4
+```
+
+- It first compares a few frames spread over the clip. If they all show the same view (to within 1 px), the camera is still: wall coordinates are just the frame pixels, and it stops there after about a second.
+- For a moving camera it follows points on the wall from frame to frame (cheap), and about once a second (`--anchor-every S`) matches a frame straight to a reference view, so small errors don't add up (drift). On a laptop this takes about 20 ms per frame.
+- Output goes to `outputs/<input name>/`:
+  - `camera.json`: still or moving and, for a moving camera, one 3x3 matrix per frame that maps the frame's pixels to wall coordinates (`null` for a frame that couldn't be aligned).
+  - `align_debug.mp4` (moving camera only; skip it with `--no-video`): every frame warped onto the reference view, over a faded copy of that view.
+- The summary shows how far the camera moved, how many frames were aligned, how much drift the anchors corrected, and the time taken.
+- `beta holds` runs the alignment itself when the output folder has no `camera.json` for the clip. Run `beta align` on its own to look at the debug video or to change `--anchor-every`.
+
+Things to check in `align_debug.mp4`:
+- **The wall stands still.** If the alignment is right, only the climber moves. A wall that jumps, or slides against the faded copy around the frame, means badly aligned frames.
+- **The header** shows the frame number, how the frame was aligned (`track`: followed from the last anchor, `anchor`: matched to the reference view) and how many points agreed. Frames that couldn't be aligned say LOST in red, and only the faded copy is shown.
+
 ### 2. Track the climber's pose
 
 Pose uses [MediaPipe Pose](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker): for every frame it finds 33 body landmarks (shoulders, wrists, hips, ankles, toes, ...).
@@ -78,7 +98,8 @@ Things to check in `pose_debug.mp4`:
 
 ### Assumptions and known limitations
 
-- The camera is static (tripod or propped phone).
+- The camera may be still (tripod or propped phone) or handheld. A phone that turns and tilts to follow the climber is fine.
+- Alignment fails when the person filming walks far sideways (angled wall panels then shift by different amounts) or when the climber fills the frame (too little wall left to match).
 - Routes are marked by hold color. Gyms that mark routes with tape on multicolor holds aren't supported yet.
 - If the climber stays in one spot for more than half the clip, they end up in the median background. Use `--frame N` with a frame where they're out of the way.
 - iPhone HEIC photos can't be read. Export as JPEG, or set Settings > Camera > Formats > Most Compatible.

@@ -1,7 +1,7 @@
 """Command line interface: ``python -m beta <stage> ...`` (or ``beta <stage> ...``).
 
 Each stage reads and writes files in ``outputs/<input name>/`` so it can be
-rerun on its own. Milestone 1 stages so far: ``holds``, ``pose``.
+rerun on its own. Milestone 1 stages so far: ``align``, ``holds``, ``pose``.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+from beta.align import CameraTrack, estimate_camera, save_camera, write_align_video
 from beta.holds import (
     PRESETS,
     UNRELIABLE_COLORS,
@@ -33,7 +34,7 @@ from beta.pose import (
     save_pose,
     write_pose_video,
 )
-from beta.video import UNSUPPORTED_PHOTO_EXTS, imwrite, is_image, iter_frames, load_input, probe
+from beta.video import UNSUPPORTED_PHOTO_EXTS, VideoInfo, imwrite, is_image, iter_frames, load_input, probe
 
 
 def _ints(text: str, count: int, shape: str) -> tuple[int, ...]:
@@ -62,6 +63,16 @@ def unit_arg(text: str) -> float:
         value = -1.0
     if not 0.0 <= value <= 1.0:
         raise argparse.ArgumentTypeError(f"expected a number from 0 to 1, got {text!r}")
+    return value
+
+
+def positive_arg(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        value = 0.0
+    if not value > 0:  # also rejects nan
+        raise argparse.ArgumentTypeError(f"expected a number above 0, got {text!r}")
     return value
 
 
@@ -169,6 +180,62 @@ def _progress(total: int):
             print(f"\r  frame {done}/{total}", end="", file=sys.stderr, flush=True)
 
     return report
+
+
+def _video_source(path: Path, info: VideoInfo) -> dict[str, Any]:
+    """What a stage that reads the whole clip records about it (frame count from the header)."""
+    return {
+        "path": path,
+        "kind": "video",
+        "fps": info.fps,
+        "frame_count": info.frame_count,
+        "width": info.width,
+        "height": info.height,
+        "bit_depth": info.bit_depth,
+    }
+
+
+def _print_camera(cam: CameraTrack) -> None:
+    s = cam.summary
+    if cam.mode == "still":
+        print(f"Camera is still (largest shift {s['max_shift_px']:.1f} px over {s['checked_frames']} sampled frames)")
+        if s.get("note"):
+            print(f"warning: {s['note']}", file=sys.stderr)
+        return
+    print(f"Camera moves: up to {s['max_shift_px']:.0f} px from frame {cam.reference_frame}'s view")
+    total, lost = cam.frame_count, s["lost_frames"]
+    line = f"  Aligned {total - lost} of {total} frames"
+    if lost:
+        run, start = s["longest_lost_run"]
+        line += f" ({lost} lost, longest run {run} from frame {start})"
+    print(line)
+    fix = s["anchor_correction_px"]
+    print(f"  Drift corrected at anchors: median {fix['median']:.1f} px, max {fix['max']:.1f} px")
+    print(f"  Took {s['seconds']:.1f} s ({1000 * s['seconds'] / max(total, 1):.0f} ms per frame)")
+
+
+def cmd_align(args: argparse.Namespace) -> int:
+    path: Path = args.input
+    if is_image(path) or path.suffix.lower() in UNSUPPORTED_PHOTO_EXTS:
+        raise ValueError(f"{path.name} is a photo: align needs a video of the climb")
+    info = probe(path)
+    out_dir = args.out or default_out_dir(path)
+    if out_dir.exists() and not out_dir.is_dir():
+        raise ValueError(f"output folder {out_dir} is a file")
+
+    print(f"Checking whether the camera moves in {path.name} ...")
+    cam = estimate_camera(path, info, anchor_every_s=args.anchor_every, progress=_progress(info.frame_count))
+    if cam.mode == "moving" and sys.stderr.isatty():
+        print(file=sys.stderr)  # end the frame counter's line
+    written = [save_camera(out_dir / "camera.json", cam, _video_source(path, info), {"anchor_every_s": args.anchor_every})]
+    if cam.mode == "moving" and not args.no_video:
+        written.append(write_align_video(path, cam, out_dir / "align_debug.mp4"))
+
+    _print_camera(cam)
+    print("Wrote:")
+    for p in written:
+        print(f"  {p}")
+    return 0
 
 
 def _overlay_holds(path: Path, width: int, height: int) -> list:
@@ -301,6 +368,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--out", type=Path, metavar="DIR", help="output directory (default: outputs/<input name>)")
     p.set_defaults(func=cmd_holds)
+
+    p = sub.add_parser(
+        "align",
+        help="line up a handheld camera's frames with one view of the wall",
+        description=(
+            "Check whether the camera moves and, if it does, work out for every frame how to map it onto one fixed "
+            "view of the wall (wall coordinates), so holds stay put while the phone tilts. Writes camera.json and, "
+            "for a moving camera, align_debug.mp4 (every frame warped onto that view)."
+        ),
+    )
+    p.add_argument("input", type=Path, help="video of the climb")
+    p.add_argument("--anchor-every", type=positive_arg, default=1.0, metavar="S", help="re-match a frame to the reference view every S seconds, to stop drift (default: %(default)s)")
+    p.add_argument("--no-video", action="store_true", help="only write camera.json, skip align_debug.mp4")
+    p.add_argument("--out", type=Path, metavar="DIR", help="output directory (default: outputs/<input name>)")
+    p.set_defaults(func=cmd_align)
 
     p = sub.add_parser(
         "pose",
