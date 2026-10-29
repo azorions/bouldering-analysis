@@ -129,7 +129,7 @@ These failure modes are implied by the spec but not covered by any of its tests.
   - `camera_ref(cam) -> dict`: `{"id", "mode", "canvas": [w, h]}`, which goes into `holds.json`.
   - `save_camera(path, cam, source) -> Path`, `load_camera(path) -> tuple[CameraTrack, dict]`.
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_align.py`
+- [x] **Step 1: Write the failing tests** in `tests/test_align.py`
 
 ```python
 import numpy as np
@@ -187,12 +187,12 @@ def test_camera_json_round_trip_keeps_the_id(tmp_path):
     assert still.mode == "still" and np.array_equal(still.frame_to_wall(4), np.eye(3))
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_align.py -v`
 Expected: FAIL, `ModuleNotFoundError: No module named 'beta.align'`
 
-- [ ] **Step 3: Implement the Task 1 interfaces in `src/beta/align.py`**
+- [x] **Step 3: Implement the Task 1 interfaces in `src/beta/align.py`**
 
 - Module docstring: explain wall coordinates and why a homography fits a handheld phone. A camera that rotates about its own center maps every image point by one homography, whatever its depth.
 - `warp_to_wall`:
@@ -201,12 +201,12 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'beta.align'`
 - `save_camera` writes matrices at full float precision, so `load_camera` restores them exactly and the id survives a round trip. It also writes `"id"`. `indent=None`, like `pose.json`.
 - JSON shape: `{source, params, id, mode, reference_frame, canvas: [w, h], fps, frame_count, width, height, frames: [{frame, matrix | null, method, inliers}], summary}`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_align.py -v`
 Expected: 7 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/align.py tests/test_align.py
@@ -243,7 +243,7 @@ git commit -m "feat(align): add camera track data and camera.json"
   - `synthetic.make_moving_climb_video(path, width=640, height=480, n_frames=45, fps=15.0, seed=0, tilt_frac=0.2, blank_frames=(), climber_frac=1.0) -> MovingTruth`.
   - conftest: a session fixture `moving_video -> (path, MovingTruth)`, with 640x480, 45 frames, 15 fps.
 
-- [ ] **Step 1: Add `make_moving_climb_video`** to `src/beta/synthetic.py`
+- [x] **Step 1: Add `make_moving_climb_video`** to `src/beta/synthetic.py`
 
 - Render `make_wall(width, round(height * (1 + tilt_frac)) + 2, seed)` once.
 - Each frame is `cv2.warpPerspective(big_wall, M_t, (width, height))`, with a smooth path like the real clip:
@@ -256,7 +256,7 @@ git commit -m "feat(align): add camera track data and camera.json"
 - Write MJPG `.avi`.
 - This is test-support code, so it has no separate test; the Task 2 tests exercise it.
 
-- [ ] **Step 2: Write the failing tests** (append to `tests/test_align.py`; add `moving_video` to conftest)
+- [x] **Step 2: Write the failing tests** (append to `tests/test_align.py`; add `moving_video` to conftest)
 
 ```python
 from beta.align import STILL_TOL_PX, check_still, estimate_camera
@@ -325,12 +325,12 @@ def test_alignment_scales_back_from_working_size(tmp_path):  # Review Focus 3
     assert cam.canvas[0] >= 1600 and max(frame_errors(cam, truth)) <= 1.5  # 1 working px is ~1.6 full-res px
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_align.py -v`
 Expected: the new tests FAIL with `ImportError: cannot import name 'check_still'`. The Task 1 tests still pass.
 
-- [ ] **Step 4: Implement `check_still` and `estimate_camera`**
+- [x] **Step 4: Implement `check_still` and `estimate_camera`**
 
 All feature work is done on grayscale copies scaled by `s = min(1, ALIGN_MAX_SIDE / max(w, h))`. The full-resolution transform is `S⁻¹·H·S`, with `S = diag(s, s, 1)`. Matching uses:
 - SIFT with `nfeatures=2000`, a ratio test at 0.75 and a BF L2 kNN matcher.
@@ -366,17 +366,17 @@ lost -> matrix None, method "lost", H_prev = None (forces an anchor attempt next
 - The climber moves differently from the wall, so RANSAC rejects matches on the climber. Comment on this where you match.
 - `progress(i + 1)` is called after each frame, if given.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_align.py -v`
 Expected: 15 passed. The long-clip test may take a few seconds.
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `uv run pytest`
 Expected: all pass
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/beta/align.py src/beta/synthetic.py tests/conftest.py tests/test_align.py
@@ -402,7 +402,7 @@ git commit -m "feat(align): estimate camera movement with tracked points and anc
   - `cli._video_source(path, info) -> dict`: `{"path", "kind": "video", "fps", "frame_count", "width", "height", "bit_depth"}`, with the header frame count.
   - `cli._print_camera(cam) -> None`.
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/test_cli.py`)
+- [x] **Step 1: Write the failing tests** (append to `tests/test_cli.py`)
 
 ```python
 from beta.align import load_camera
@@ -431,12 +431,12 @@ def test_align_no_video_and_bad_options(moving_video, tmp_path, capsys):
         main(["align", "clip.mp4", "--anchor-every", "0"])
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_cli.py -k align -v`
 Expected: FAIL (`invalid choice: 'align'`)
 
-- [ ] **Step 3: Implement the Task 3 interfaces**
+- [x] **Step 3: Implement the Task 3 interfaces**
 
 **`write_align_video`**
 - Size and codec as in `pose.write_pose_video`: scaled to ≤ 1280 px wide, even dimensions, `mp4v`.
@@ -476,12 +476,12 @@ Camera moves: up to {max_shift:.0f} px from frame {ref}'s view
   - the camera may be still or handheld;
   - alignment fails when the filmer walks far sideways, or when the climber fills the frame.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_cli.py -k align -v`
 Expected: 3 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/align.py src/beta/cli.py src/beta/video.py README.md tests/test_cli.py
