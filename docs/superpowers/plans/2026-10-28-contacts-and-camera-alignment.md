@@ -632,7 +632,7 @@ git commit -m "feat(holds): detect holds on camera-aligned frames"
     - Holds with a moving `camera` key load `camera.json` from the same folder.
     - If it's missing or its id differs, print `warning: {path} was made with a different camera.json (run `beta holds` again), so its holds are not drawn` and return `([], None)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/test_pose.py`:
 
@@ -674,23 +674,23 @@ def test_pose_skips_holds_from_another_alignment(moving_video, tmp_path, monkeyp
          # `pose` prints "was made with a different camera.json" on stderr and passes holds == []
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_pose.py tests/test_cli.py -k "camera or lost or alignment or draws_holds" -v`
 Expected: FAIL (`unexpected keyword argument 'wall_to_frame'`)
 
-- [ ] **Step 3: Implement the Task 5 interfaces**
+- [x] **Step 3: Implement the Task 5 interfaces**
 
 - `_draw_holds` maps the polygon and centroid through `wall_to_frame` with `apply_h` before scaling by `(sx, sy)`.
 - `cmd_pose` unpacks `holds, camera = _overlay_holds(...)` and passes `camera` to `write_pose_video`.
 - For holds without a `camera` key (made from an image), keep the existing size check.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest`
 Expected: all pass
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/pose.py src/beta/cli.py tests/test_pose.py tests/test_cli.py

@@ -16,6 +16,7 @@ from beta.align import CameraTrack, camera_ref, estimate_camera, load_camera, sa
 from beta.holds import (
     PRESETS,
     UNRELIABLE_COLORS,
+    Hold,
     HoldSpec,
     detect_holds,
     draw_holds_debug,
@@ -270,12 +271,17 @@ def cmd_align(args: argparse.Namespace) -> int:
     return 0
 
 
-def _overlay_holds(path: Path, width: int, height: int) -> list:
-    """The holds in ``path`` to draw on the debug video, or none (with a warning)
-    if they come from an image of a different size than the video."""
+def _overlay_holds(path: Path, width: int, height: int) -> tuple[list[Hold], CameraTrack | None]:
+    """The holds in ``path`` to draw on the debug video, plus the moving camera
+    their wall coordinates belong to (None: they are frame pixels).
+
+    No holds (with a warning) if they come from an image of a different size
+    than the video, or from a moving camera other than the camera.json next to them.
+    """
     try:
         holds, doc = load_holds(path)
         size = (doc["source"]["width"], doc["source"]["height"])
+        ref = doc.get("camera") or {}
     except (KeyError, TypeError, ValueError) as exc:  # another JSON file, a hand edit gone wrong, an old format
         raise ValueError(f"{path} is not a holds.json written by `beta holds` ({exc})") from exc
     if size != (width, height):
@@ -284,8 +290,21 @@ def _overlay_holds(path: Path, width: int, height: int) -> list:
             f"{width}x{height}, so its holds are not drawn",
             file=sys.stderr,
         )
-        return []
-    return holds
+        return [], None
+    if ref.get("mode") != "moving":  # an image, or a still camera: wall coordinates are frame pixels
+        return holds, None
+    camera = None
+    try:
+        camera, _ = load_camera(path.parent / "camera.json")
+    except (OSError, KeyError, TypeError, ValueError):
+        pass
+    if camera is None or camera.id != ref.get("id"):
+        print(
+            f"warning: {path} was made with a different camera.json (run `beta holds` again), so its holds are not drawn",
+            file=sys.stderr,
+        )
+        return [], None
+    return holds, camera
 
 
 def cmd_pose(args: argparse.Namespace) -> int:
@@ -310,14 +329,14 @@ def cmd_pose(args: argparse.Namespace) -> int:
 
     # Holds are only drawn on the debug video.
     holds_path = args.holds or out_dir / "holds.json"
-    holds = []
+    holds, camera = [], None
     if args.no_video:
         if args.holds is not None:
             print("warning: --holds is ignored with --no-video", file=sys.stderr)
     elif args.holds is not None and not args.holds.is_file():
         raise FileNotFoundError(f"no such holds file: {args.holds}")
     elif holds_path.is_file():
-        holds = _overlay_holds(holds_path, info.width, info.height)
+        holds, camera = _overlay_holds(holds_path, info.width, info.height)
     out_dir.mkdir(parents=True, exist_ok=True)  # e.g. no write permission: fail now, not after the pose pass
 
     name = model.name if args.model_path is not None else f"{args.model} model"
@@ -348,7 +367,7 @@ def cmd_pose(args: argparse.Namespace) -> int:
     }
     written = [save_pose(out_dir / "pose.json", track, source, params)]
     if not args.no_video:
-        written.append(write_pose_video(path, track, out_dir / "pose_debug.mp4", holds))
+        written.append(write_pose_video(path, track, out_dir / "pose_debug.mp4", holds, camera=camera))
 
     found = track.detected()
     # Rounded down, so a clip with a missed frame never shows 100%.
@@ -425,7 +444,7 @@ def build_parser() -> argparse.ArgumentParser:
             "the output directory has one). The model is downloaded to models/ on first use."
         ),
     )
-    p.add_argument("input", type=Path, help="video of the climb, from a static camera")
+    p.add_argument("input", type=Path, help="video of the climb")
     p.add_argument("--model", choices=MODEL_VARIANTS, default="heavy", help="model size: lite is fastest, heavy is most accurate (default: %(default)s)")
     p.add_argument("--model-path", type=Path, metavar="FILE", help="use this .task model file instead of downloading one")
     p.add_argument("--min-confidence", type=unit_arg, default=0.5, metavar="C", help="MediaPipe's detection, presence and tracking thresholds, 0 to 1 (default: %(default)s)")

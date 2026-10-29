@@ -10,7 +10,8 @@ import pytest
 from conftest import HIDDEN, STICK, FakeLandmarker, FakeResponse
 
 from beta import pose
-from beta.holds import HoldSpec, detect_holds
+from beta.align import CameraTrack, FrameTransform
+from beta.holds import Hold, HoldSpec, detect_holds
 from beta.pose import (
     CONTACT_POINTS,
     LANDMARK_NAMES,
@@ -151,6 +152,32 @@ def test_draw_pose_draws_holds_underneath():
     with_holds = draw_pose(image, None, holds)
     x, y, w, h = holds[0].bbox
     assert (with_holds[y : y + h, x : x + w] != without[y : y + h, x : x + w]).any()
+
+
+SQUARE = Hold(1, ((100, 100), (140, 100), (140, 140), (100, 140)), (120.0, 120.0), 1600.0, (100, 100, 40, 40), False)
+
+
+def test_pose_video_draws_holds_where_the_camera_sees_them():
+    frame = np.zeros((480, 640, 3), np.uint8)
+    img = draw_pose(frame, None, [SQUARE], wall_to_frame=np.array([[1.0, 0, -30], [0, 1.0, 0], [0, 0, 1.0]]))
+    assert img[105:135, 69:72].max() > 60  # the left edge now at x = 70
+    assert img[105:135, 138:143].max() < 30  # nothing left at the old right edge (x = 140)
+
+
+def test_pose_video_skips_holds_on_lost_frames(climb_video, tmp_path, monkeypatch):
+    path, _ = climb_video
+    transforms = tuple(FrameTransform(i, None, "lost", 0) if i == 3 else FrameTransform(i, np.eye(3), "track", 100) for i in range(31))
+    cam = CameraTrack("moving", 15.0, 31, 640, 480, (640, 480), 0, transforms)
+    drawn = []
+    real = pose.draw_pose
+
+    def record(frame, p, holds=(), size=None, wall_to_frame=None):
+        drawn.append(list(holds))
+        return real(frame, p, holds, size, wall_to_frame)
+
+    monkeypatch.setattr(pose, "draw_pose", record)
+    write_pose_video(path, PoseTrack([], 15.0, 640, 480), tmp_path / "pose_debug.mp4", [SQUARE], camera=cam)
+    assert len(drawn) == 31 and drawn[3] == [] and drawn[2] == [SQUARE]
 
 
 def test_write_pose_video(climb_video, tmp_path):

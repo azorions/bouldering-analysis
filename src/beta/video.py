@@ -147,8 +147,8 @@ def read_frame(path: str | Path, index: int) -> np.ndarray:
 
     On variable-frame-rate phone video, seeking by index can land a few frames
     away from what sequential reading calls frame ``index``. That's harmless
-    for hold detection (static camera), but stages that need exact frame
-    numbers must read sequentially with :func:`iter_frames`.
+    for a still camera's median background, but stages that need exact frame
+    numbers must read sequentially with :func:`iter_frames` or :func:`read_frames`.
     """
     if index < 0:
         raise IndexError(f"frame index must be >= 0, got {index}")

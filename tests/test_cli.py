@@ -14,7 +14,7 @@ from beta import cli, pose, video
 from beta.align import apply_h, load_camera
 from beta.cli import main
 from beta.holds import HoldSpec, detect_holds, load_holds
-from beta.jsonio import load_json
+from beta.jsonio import load_json, save_json
 from beta.pose import load_pose
 from beta.video import imread, imwrite, median_background, probe
 
@@ -182,7 +182,7 @@ def test_pose_draws_holds_from_the_output_dir(climb_video, tmp_path, fake_model,
     assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
     drawn = []
 
-    def write_video(src, track, out_path, holds=()):
+    def write_video(src, track, out_path, holds=(), camera=None):
         drawn.extend(holds)
         return out_path
 
@@ -204,6 +204,38 @@ def test_pose_skips_holds_from_an_image_of_another_size(climb_video, wall, tmp_p
     captured = capsys.readouterr()
     assert "made from a 1280x960 image but the video is 640x480" in captured.err
     assert "drawn on the video" not in captured.out
+
+
+def _pose_with_fake_video(path, out, tmp_path, monkeypatch) -> dict:
+    """Run `pose` with a fake model; returns what reached write_pose_video."""
+    seen = {}
+    monkeypatch.setattr(cli, "open_landmarker", lambda p, c: FakeLandmarker(45))
+    monkeypatch.setattr(cli, "write_pose_video", lambda s, t, o, holds=(), camera=None: seen.update(holds=holds, camera=camera) or o)
+    model = tmp_path / "fake.task"
+    model.write_bytes(b"x")
+    assert main(["pose", str(path), "--model-path", str(model), "--out", str(out)]) == 0
+    return seen
+
+
+def test_pose_uses_the_camera_for_moving_holds(moving_video, tmp_path, monkeypatch):
+    path, _ = moving_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    seen = _pose_with_fake_video(path, out, tmp_path, monkeypatch)
+    assert seen["holds"] and seen["camera"].mode == "moving"
+
+
+def test_pose_skips_holds_from_another_alignment(moving_video, tmp_path, monkeypatch, capsys):
+    path, _ = moving_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    doc = load_json(out / "holds.json")
+    doc["camera"]["id"] = "000000000000"
+    save_json(out / "holds.json", doc)
+    capsys.readouterr()
+    seen = _pose_with_fake_video(path, out, tmp_path, monkeypatch)
+    assert "was made with a different camera.json" in capsys.readouterr().err
+    assert seen["holds"] == []
 
 
 def test_pose_rejects_photos_and_bad_options(tmp_path, capsys):
