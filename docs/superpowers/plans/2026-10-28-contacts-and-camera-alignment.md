@@ -703,7 +703,7 @@ git commit -m "feat(pose): draw holds where a moving camera sees them"
 
 No code. Stop here and work through it with the user.
 
-- [ ] **Step 1: Align**
+- [x] **Step 1: Align**
 
 Run: `uv run beta align samples/bouldering_video_sample.mp4`
 Expected:
@@ -714,7 +714,7 @@ Expected:
 
 Open `outputs/bouldering_video_sample/align_debug.mp4`. The wall should stand still.
 
-- [ ] **Step 2: Holds**
+- [x] **Step 2: Holds**
 
 Run: `uv run beta holds samples/bouldering_video_sample.mp4 --color white`
 Expected: `holds_debug.png` is sharp, not smeared.
@@ -723,12 +723,12 @@ With the user, tune with `--sample X,Y` (pixels in `background.png`) and `--roi`
 - False holds on the lit ceiling don't matter.
 - Missing parts of touched holds do.
 
-- [ ] **Step 3: Pose debug with aligned holds**
+- [x] **Step 3: Pose debug with aligned holds**
 
 Run: `uv run beta pose samples/bouldering_video_sample.mp4` (about 1.5 min)
 Expected: in `pose_debug.mp4` the hold outlines stay on the holds while the camera moves.
 
-- [ ] **Step 4: The user writes the answer key** to `samples/bouldering_video_sample.truth.json` (gitignored, like the clip)
+- [x] **Step 4: The user writes the answer key** to `samples/bouldering_video_sample.truth.json` (gitignored, like the clip)
 
 ```json
 {"holds_command": "beta holds ... (the exact tuned command)", "top_hold": 0,
@@ -737,7 +737,7 @@ Expected: in `pose_debug.mp4` the hold outlines stay on the holds while the came
 
 Use the hold numbers from `holds_debug.png`.
 
-- [ ] **Step 5: Ask the user** whether CLAUDE.md's "Assume a static camera for now" line should change. CLAUDE.md is theirs, so don't edit it unasked. Get sign-off before Task 7.
+- [x] **Step 5: Ask the user** whether CLAUDE.md's "Assume a static camera for now" line should change. CLAUDE.md is theirs, so don't edit it unasked. Get sign-off before Task 7.
 
 ---
 
