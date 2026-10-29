@@ -71,6 +71,11 @@ def expected_order(truth: list[TrueHold]) -> list[TrueHold]:
     return sorted(truth, key=lambda t: (-t.center[1], t.center[0]))
 
 
+def square_hold(id: int, x: int, y: int, size: int = 40) -> Hold:
+    """A square hold with its top-left corner at (x, y)."""
+    return Hold(id, ((x, y), (x + size, y), (x + size, y + size), (x, y + size)), (x + size / 2, y + size / 2), float(size * size), (x, y, size, size), False)
+
+
 XY = tuple[float, float]
 
 

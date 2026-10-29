@@ -921,7 +921,7 @@ git commit -m "feat(contacts): add hand and foot points with a left/right fix"
   - `busy_frames(contacts: list[Contact], frame_count) -> np.ndarray` (F,) bool.
   - conftest: `square_hold(id, x, y, size=40) -> Hold`, a square with its top-left corner at (x, y).
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_contacts.py`
+- [x] **Step 1: Write the failing tests** in `tests/test_contacts.py`
 
 ```python
 import numpy as np, pytest
@@ -997,12 +997,12 @@ def test_hold_distances_are_signed():
     assert d[0, 0] == pytest.approx(0.2) and d[1, 0] == pytest.approx(-0.1) and np.isnan(d[2, 0])
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_contacts.py -v`
 Expected: FAIL (`ModuleNotFoundError: beta.contacts`)
 
-- [ ] **Step 3: Implement `detect_contacts`**
+- [x] **Step 3: Implement `detect_contacts`**
 
 The tests don't settle the onset backdating, so it is pinned here. It refines the spec's "backdated to the first frame of the run" so the start is when the hand arrived. The speed window still sees the reach for about 0.1 s after the hand lands, so the first slow frame comes slightly later.
 
@@ -1022,12 +1022,12 @@ end of clip: an open contact ends at last_confirmed_inside
 
 The docstring states: speed never releases a contact, because hands rotate and slide on holds.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_contacts.py -v`
 Expected: 13 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/contacts.py tests/conftest.py tests/test_contacts.py
