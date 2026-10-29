@@ -1227,7 +1227,7 @@ git commit -m "feat(contacts): split the clip into attempts and describe falls"
   - `save_contacts(path, result, source, inputs, params) -> Path`.
   - `draw_contacts_debug(result, holds, background=None) -> np.ndarray`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/test_contacts.py`, with a scripted climb at 30 fps on square holds in 640x480. Holds 1–2 are the feet holds and 3–5 the hand holds.
 
@@ -1337,12 +1337,12 @@ def test_contacts_refuses_mismatched_inputs(climb_video, wall, tmp_path, capsys)
     assert "made from an image" in capsys.readouterr().err
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_contacts.py tests/test_cli.py -k "analyze or camera_motion or json_shape or debug_image or contacts" -v`
 Expected: FAIL (`ImportError: cannot import name 'analyze'`)
 
-- [ ] **Step 3: Implement `analyze`, the JSON functions and `draw_contacts_debug`**
+- [x] **Step 3: Implement `analyze`, the JSON functions and `draw_contacts_debug`**
 
 **`analyze`**, in order:
 1. `wall_landmarks`
@@ -1366,7 +1366,7 @@ Expected: FAIL (`ImportError: cannot import name 'analyze'`)
   - The floor line is drawn in yellow when it is known.
 - **Header:** torso px, the floor and its source, and the outcome of each attempt.
 
-- [ ] **Step 4: Implement `cmd_contacts` and the parser**
+- [x] **Step 4: Implement `cmd_contacts` and the parser**
 
 **Inputs:** `--pose`, `--holds` and `--camera` default to `out_dir/{pose,holds,camera}.json`. The checks, in order, each fail with a `ValueError` whose message names the command to run:
 
@@ -1413,12 +1413,12 @@ Wrote:
 
 **`README.md` section 3:** cover the command, the outputs, how to read `contacts_debug.png`, the options, and the known risks from the spec (hidden hands, ceiling false holds needing `--top-hold`).
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest`
 Expected: all pass
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/beta/contacts.py src/beta/cli.py README.md tests/test_contacts.py tests/test_cli.py

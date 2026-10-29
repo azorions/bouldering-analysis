@@ -97,6 +97,41 @@ Things to check in `pose_debug.mp4`:
 - **Left/right swaps.** From behind, MediaPipe sometimes mixes up the climber's left and right; the blue and orange limbs then jump sides for a few frames.
 - **Missed frames.** A climber who is small in a wide shot may not be found. Film closer, or lower `--min-confidence` (default 0.5).
 
+### 3. Hand and foot contacts
+
+Contacts combine the three files above into the holds each hand and foot used, in order, and split the clip into attempts.
+
+```
+uv run python -m beta holds clip.mp4 --color green
+uv run python -m beta pose clip.mp4
+uv run python -m beta contacts clip.mp4
+```
+
+- Each hand and foot is reduced to the point that touches a hold: just past the knuckles for a hand, the front of the shoe for a foot. These are mapped into wall coordinates, so a moving camera doesn't move them. MediaPipe's left/right mix-ups are undone first.
+- A hand or foot is **on a hold** once it stays on (or just outside) the hold's outline, slowly, for 0.25 s. The contact is dated back to when it arrived, and ends once it has been well off the hold for 0.15 s. Distances are measured in torso lengths and times in seconds, so the same settings work at any resolution, camera distance and frame rate.
+- An **attempt** runs from both feet leaving the floor until the climber tops out (both hands on the top hold for 1 s), falls (the hips drop a torso length within 0.5 s with the hands off), or comes back down. Contacts outside an attempt, like a foot brushing a hold while walking back, are left out. The floor is estimated from where the feet rest with the hands free.
+- Output goes to `outputs/<input name>/`:
+  - `contacts.json`: per attempt, the outcome, each limb's hold sequence (a re-grip of the same hold counts once), every contact with its start and end time, and for a fall the holds each limb was on and the order they let go.
+  - `contacts_debug.png`: a timeline with one row per limb above the wall.
+- The summary prints each attempt's outcome, time span and highest hold, then each limb's sequence, e.g. `LH: 8, 12, 16`.
+
+Reading `contacts_debug.png`:
+- **Bars** are contacts, labelled with the hold number: blue for the climber's left limbs, orange for the right, as in `pose_debug.mp4`.
+- **Grey** stretches are where MediaPipe wasn't sure it could see that hand or foot. A contact that's missing from the timeline usually sits in one.
+- **Shaded** spans are attempts, and a **red** line marks a fall.
+- **Below:** the wall with the holds used outlined in their limb's colour (white if both sides used them), the high point ringed, and the floor line in yellow.
+
+Options:
+- `--top-hold N`: the route's top hold. By default it's the highest-numbered hold, which is wrong when false holds were detected above the route (lit ceiling, wall edges).
+- `--floor-y Y`: the floor's y in `background.png` pixels, if the estimate is wrong or missing. Without a floor the whole clip is treated as one attempt.
+- `--min-hold-s S`: how long a hand or foot must stay on a hold to count (default 0.25).
+- `--min-visibility V`: ignore hands and feet MediaPipe is less sure of than this (default 0.5).
+- `--pose`, `--holds`, `--camera FILE`: use these files instead of the ones in the output folder. `contacts` refuses files that don't belong together (another video, another camera.json) and says which command to rerun.
+
+Known risks:
+- **Hidden hands.** Hands are clearly seen in only about 60% of climbing frames. A hand hidden for a whole grip is missed; the grey stretches show where.
+- **Partly outlined holds.** A contact can only start within a few pixels of a hold's outline, so a hold outlined only on its lit half (see section 1) misses contacts on the rest.
+
 ### Assumptions and known limitations
 
 - The camera may be still (tripod or propped phone) or handheld. A phone that turns and tilts to follow the climber is fine.

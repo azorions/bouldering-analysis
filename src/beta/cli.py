@@ -1,7 +1,7 @@
 """Command line interface: ``python -m beta <stage> ...`` (or ``beta <stage> ...``).
 
 Each stage reads and writes files in ``outputs/<input name>/`` so it can be
-rerun on its own. Milestone 1 stages so far: ``align``, ``holds``, ``pose``.
+rerun on its own. Milestone 1 stages: ``align``, ``holds``, ``pose``, ``contacts``.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from beta.align import CameraTrack, camera_ref, estimate_camera, load_camera, save_camera, write_align_video
+from beta.contacts import OUTCOME_TEXT, ContactParams, analyze, draw_contacts_debug, save_contacts
+from beta.jsonio import load_json
 from beta.holds import (
     PRESETS,
     UNRELIABLE_COLORS,
@@ -30,12 +32,13 @@ from beta.pose import (
     PoseTrack,
     download_model,
     estimate_poses,
+    load_pose,
     model_file,
     open_landmarker,
     save_pose,
     write_pose_video,
 )
-from beta.video import UNSUPPORTED_PHOTO_EXTS, VideoInfo, imwrite, is_image, iter_frames, load_input, probe
+from beta.video import UNSUPPORTED_PHOTO_EXTS, VideoInfo, imread, imwrite, is_image, iter_frames, load_input, probe
 
 
 def _ints(text: str, count: int, shape: str) -> tuple[int, ...]:
@@ -388,6 +391,87 @@ def cmd_pose(args: argparse.Namespace) -> int:
     return 0
 
 
+def _contact_inputs(args: argparse.Namespace, out_dir: Path) -> tuple[Path, Path, Path]:
+    """holds.json, pose.json and camera.json for the contacts stage, checked to belong together.
+
+    Each problem names the command that fixes it.
+    """
+    path: Path = args.input
+    holds_path = args.holds or out_dir / "holds.json"
+    pose_path = args.pose or out_dir / "pose.json"
+    camera_path = args.camera or out_dir / "camera.json"
+    if not holds_path.is_file():
+        raise ValueError(f"no holds.json in {holds_path.parent}: run `beta holds {path} --color ...` first")
+    if "camera" not in load_json(holds_path):
+        raise ValueError(f"{holds_path} was made from an image; contacts needs holds detected on this video: run `beta holds {path}`")
+    if not pose_path.is_file():
+        raise ValueError(f"no pose.json in {pose_path.parent}: run `beta pose {path}` first")
+    if not camera_path.is_file():
+        raise ValueError(f"no camera.json in {camera_path.parent}: run `beta holds {path}` (it checks the camera) first")
+    return holds_path, pose_path, camera_path
+
+
+def cmd_contacts(args: argparse.Namespace) -> int:
+    path: Path = args.input
+    out_dir = args.out or default_out_dir(path)
+    holds_path, pose_path, camera_path = _contact_inputs(args, out_dir)
+    try:
+        holds, holds_doc = load_holds(holds_path)
+        camera, camera_doc = load_camera(camera_path)
+        track, pose_doc = load_pose(pose_path)
+        same_file = Path(pose_doc["source"]["path"]).name == Path(camera_doc["source"]["path"]).name
+    except (KeyError, TypeError) as exc:  # a hand edit gone wrong, an old format
+        raise ValueError(f"could not read the inputs in {out_dir} ({exc}): rerun the stages that made them") from exc
+    if camera.id != holds_doc["camera"].get("id"):
+        raise ValueError(f"{holds_path} was made with a different camera.json: run `beta holds {path}` again")
+    # A still camera's frame count is the header's, which can overshoot what pose read by a frame or two.
+    if (
+        not same_file
+        or (track.width, track.height) != (camera.width, camera.height)
+        or (camera.mode == "moving" and camera.frame_count != len(track.frames))
+    ):
+        raise ValueError(f"{pose_path} and {camera_path} are from different videos: run `beta pose {path}` and `beta holds {path}` again")
+    if args.top_hold is not None and args.top_hold not in {h.id for h in holds}:
+        raise ValueError(f"no hold {args.top_hold} in holds.json")
+
+    params = ContactParams(min_hold_s=args.min_hold_s, min_visibility=args.min_visibility)
+    result = analyze(track, holds, camera, params, top_hold=args.top_hold, floor_y=args.floor_y)
+    background = None
+    background_path = out_dir / "background.png"
+    if background_path.is_file():
+        image = imread(background_path)
+        if (image.shape[1], image.shape[0]) == tuple(camera.canvas):
+            background = image
+    inputs = {"pose": pose_path, "holds": holds_path, "camera": camera_path, "camera_id": camera.id}
+    written = [
+        save_contacts(out_dir / "contacts.json", result, pose_doc["source"], inputs, params),
+        imwrite(out_dir / "contacts_debug.png", draw_contacts_debug(result, holds, background)),
+    ]
+
+    floor = (
+        f"y={result.floor_y:.0f} ({result.floor_source})"
+        if result.floor_y is not None
+        else "not found (pass --floor-y Y to set it), so the clip is treated as one attempt"
+    )
+    print(f"Climber's torso: {result.torso_px:.0f} px. Floor: {floor}")
+    if not result.attempts:
+        print(f"No attempts found: no hand or foot stayed on a hold for {params.min_hold_s:g} s")
+    for n, a in enumerate(result.attempts, 1):
+        hp = "-" if a.high_point is None else a.high_point
+        print(f"Attempt {n}: {OUTCOME_TEXT[a.outcome]}, {a.start_frame / result.fps:.1f}-{a.end_frame / result.fps:.1f} s, high point hold {hp}")
+        for limb, seq in a.sequence().items():
+            print(f"  {limb}: {', '.join(map(str, seq)) or '-'}")
+        if a.fall is not None:
+            last = ", ".join(f"{limb} {'-' if h is None else h}" for limb, h in a.fall.last_holds.items())
+            print(f"  Fell at {a.fall.frame / result.fps:.1f} s. Last holds: {last}")
+            order = ", ".join(f"{r.limb} {r.hold} at {r.frame / result.fps:.1f} s" for r in a.fall.release_order)
+            print(f"  Let go: {order or '-'}")
+    print("Wrote:")
+    for p in written:
+        print(f"  {p}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="beta", description="Bouldering beta tracker: which holds does the climber use?")
     sub = parser.add_subparsers(dest="command", required=True, metavar="<stage>")
@@ -452,6 +536,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-video", action="store_true", help="only write pose.json, skip pose_debug.mp4")
     p.add_argument("--out", type=Path, metavar="DIR", help="output directory (default: outputs/<input name>)")
     p.set_defaults(func=cmd_pose)
+
+    p = sub.add_parser(
+        "contacts",
+        help="which hold each hand and foot is on, and how each attempt ended",
+        description=(
+            "Combine pose.json, holds.json and camera.json from the output directory into each hand's and foot's "
+            "hold sequence, split into attempts (topped, fell, came down). Writes contacts.json and "
+            "contacts_debug.png (a timeline of every contact above the wall)."
+        ),
+    )
+    p.add_argument("input", type=Path, help="video of the climb (names the output directory)")
+    p.add_argument("--top-hold", type=int, metavar="N", help="the route's top hold, matched with both hands to top out (default: the highest-numbered hold)")
+    p.add_argument("--floor-y", type=float, metavar="Y", help="the floor's y in background.png pixels, if the estimate is wrong")
+    p.add_argument("--min-hold-s", type=positive_arg, default=ContactParams.min_hold_s, metavar="S", help="how long a hand or foot must stay on a hold to count (default: %(default)s)")
+    p.add_argument("--min-visibility", type=unit_arg, default=ContactParams.min_visibility, metavar="V", help="ignore hands and feet MediaPipe is less sure of than this, 0 to 1 (default: %(default)s)")
+    p.add_argument("--pose", type=Path, metavar="FILE", help="pose.json to use (default: in the output directory)")
+    p.add_argument("--holds", type=Path, metavar="FILE", help="holds.json to use (default: in the output directory)")
+    p.add_argument("--camera", type=Path, metavar="FILE", help="camera.json to use (default: in the output directory)")
+    p.add_argument("--out", type=Path, metavar="DIR", help="output directory (default: outputs/<input name>)")
+    p.set_defaults(func=cmd_contacts)
 
     return parser
 

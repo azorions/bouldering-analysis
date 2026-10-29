@@ -2,9 +2,21 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from conftest import square_hold
+from conftest import body, square_hold, track_of
 
-from beta.contacts import Contact, busy_frames, detect_contacts, hold_distances, limb_speed
+from beta.align import CameraTrack, FrameTransform
+from beta.contacts import (
+    Contact,
+    ContactParams,
+    analyze,
+    busy_frames,
+    contacts_to_dict,
+    detect_contacts,
+    draw_contacts_debug,
+    hold_distances,
+    limb_speed,
+)
+from beta.pose import LEFT_COLOR, RIGHT_COLOR
 
 A, B = square_hold(1, 100, 100), square_hold(2, 200, 100)  # centers (120,120) and (220,120)
 FAR = (0.0, 0.0)
@@ -101,3 +113,56 @@ def test_hold_distances_are_signed():
 def test_busy_frames_marks_contact_spans():
     busy = busy_frames([Contact("LH", 1, 2, 4), Contact("LF", 2, 7, 12)], 10)
     assert busy.tolist() == [False, False, True, True, True, False, False, True, True, True]
+
+
+# A scripted climb at 30 fps on square holds in 640x480: holds 1-2 for the feet, 3-5 for the hands.
+CLIMB_HOLDS = [square_hold(1, 200, 340), square_hold(2, 280, 340), square_hold(3, 180, 160), square_hold(4, 300, 160), square_hold(5, 310, 80)]
+c = {h.id: h.centroid for h in CLIMB_HOLDS}
+STILL = CameraTrack.still(30.0, 150, 640, 480)
+
+
+def scripted_climb():
+    """Stand (0-19), pull on (20), RH 4 -> 5 at 50, fall (90-99), stand on the mat (100-149)."""
+    frames = []
+    for t in range(150):
+        if t < 20 or t >= 100:
+            frames.append(body(((200.0, 300.0), (300.0, 300.0)), ((230.0, 450.0), (290.0, 450.0))))
+        elif t < 90:
+            frames.append(body((c[3], c[5] if t >= 50 else c[4]), (c[1], c[2])))
+        else:
+            lm = body((c[3], c[5]), (c[1], c[2]))
+            lm[:, 1] += 15.0 * (t - 89)
+            frames.append(lm)
+    return track_of(frames)
+
+
+def test_analyze_a_scripted_climb():
+    r = analyze(scripted_climb(), CLIMB_HOLDS, STILL)
+    assert r.floor_source == "estimated" and r.floor_y == pytest.approx(450, abs=2)
+    (a,) = r.attempts
+    assert (a.start_frame, a.outcome) == (20, "fell")
+    assert a.sequence() == {"LH": [3], "RH": [4, 5], "LF": [1], "RF": [2]}
+    assert a.fall.last_holds == {"LH": 3, "RH": 5, "LF": 1, "RF": 2}
+
+
+def test_same_contacts_with_and_without_camera_motion():
+    track = scripted_climb()
+    shifts = [np.array([[1.0, 0, 0], [0, 1.0, 2.0 * t], [0, 0, 1.0]]) for t in range(150)]
+    moved = track_of([None if p.landmarks is None else p.landmarks - [0, 2.0 * p.frame, 0, 0, 0] for p in track.frames])
+    cam = CameraTrack("moving", 30.0, 150, 640, 480, (640, 800), 0, tuple(FrameTransform(t, s, "track", 99) for t, s in enumerate(shifts)), {})
+    assert analyze(moved, CLIMB_HOLDS, cam).contacts == analyze(track, CLIMB_HOLDS, STILL).contacts
+
+
+def test_contacts_json_shape():
+    r = analyze(scripted_climb(), CLIMB_HOLDS, STILL)
+    d = contacts_to_dict(r, {"path": "clip.mp4"}, {"camera_id": "abc"}, ContactParams())
+    a = d["attempts"][0]
+    assert a["outcome"] == "fell" and a["sequence"]["RH"] == [4, 5] and a["start_s"] == pytest.approx(0.67)
+    assert a["contacts"]["LH"][0]["hold"] == 3 and a["fall"]["release_order"][0]["limb"] in ("LF", "RF", "LH", "RH")
+    assert d["params"]["min_hold_s"] == 0.25 and d["body_scale_px"] == pytest.approx(100.0)
+
+
+def test_contacts_debug_image_has_limb_colors():
+    r = analyze(scripted_climb(), CLIMB_HOLDS, STILL)
+    img = draw_contacts_debug(r, CLIMB_HOLDS, np.zeros((480, 640, 3), np.uint8))
+    assert (img == LEFT_COLOR).all(axis=2).any() and (img == RIGHT_COLOR).all(axis=2).any()

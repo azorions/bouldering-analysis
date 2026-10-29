@@ -8,14 +8,14 @@ from urllib.error import URLError
 
 import numpy as np
 import pytest
-from conftest import FOOT_CHIPS, FakeLandmarker, FakeResponse, foot_chip_wall, inside
+from conftest import FOOT_CHIPS, FakeLandmarker, FakeResponse, body, foot_chip_wall, inside, track_of
 
 from beta import cli, pose, video
 from beta.align import apply_h, load_camera
 from beta.cli import main
 from beta.holds import HoldSpec, detect_holds, load_holds
 from beta.jsonio import load_json, save_json
-from beta.pose import load_pose
+from beta.pose import load_pose, save_pose
 from beta.video import imread, imwrite, median_background, probe
 
 
@@ -371,3 +371,69 @@ def test_holds_on_image_has_no_camera(wall, tmp_path):
     assert main(["holds", str(src), "--color", "green", "--out", str(tmp_path / "o")]) == 0
     assert "camera" not in load_json(tmp_path / "o" / "holds.json")
     assert not (tmp_path / "o" / "camera.json").exists()
+
+
+def scripted_pose(out, path, holds, frames=31, hidden=()):
+    """Write a pose.json for the clip: hands on the top three holds (RH moves at frame 15), feet on the bottom two.
+
+    ``hidden`` landmarks get visibility 0.1 in every frame.
+    """
+    ordered = sorted(holds, key=lambda h: h.id)
+    hand, foot = ordered[-3:], ordered[:2]
+    lm = [body((hand[0].centroid, (hand[1] if t < 15 else hand[2]).centroid), (foot[0].centroid, foot[1].centroid)) for t in range(frames)]
+    for f in lm:
+        f[list(hidden), 3] = 0.1
+    src = {"path": path, "kind": "video", "fps": 15.0, "frame_count": frames, "width": 640, "height": 480, "bit_depth": 8}
+    save_pose(out / "pose.json", track_of(lm, fps=15.0), src, {})
+    return hand
+
+
+def test_contacts_end_to_end(climb_video, tmp_path, capsys):
+    path, _ = climb_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    hand = scripted_pose(out, path, load_holds(out / "holds.json")[0])
+    assert main(["contacts", str(path), "--out", str(out)]) == 0
+    doc = load_json(out / "contacts.json")
+    assert doc["attempts"][0]["sequence"]["RH"] == [hand[1].id, hand[2].id]
+    assert imread(out / "contacts_debug.png").size > 0
+    printed = capsys.readouterr().out
+    assert "Attempt 1: clip ended mid-attempt" in printed and f"RH: {hand[1].id}, {hand[2].id}" in printed
+
+
+def test_contacts_accepts_pose_with_fewer_frames_than_the_header(climb_video, tmp_path):  # Review Focus 2
+    path, _ = climb_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    scripted_pose(out, path, load_holds(out / "holds.json")[0], frames=30)
+    assert main(["contacts", str(path), "--out", str(out)]) == 0
+
+
+def test_limb_never_seen(climb_video, tmp_path, capsys):  # Review Focus 5
+    path, _ = climb_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    scripted_pose(out, path, load_holds(out / "holds.json")[0], hidden=(32,))  # right toe
+    assert main(["contacts", str(path), "--out", str(out)]) == 0
+    assert load_json(out / "contacts.json")["attempts"][0]["sequence"]["RF"] == []
+    assert "RF: -" in capsys.readouterr().out
+
+
+def test_contacts_refuses_mismatched_inputs(climb_video, wall, tmp_path, capsys):
+    path, _ = climb_video
+    out = tmp_path / "out"
+    assert main(["contacts", str(path), "--out", str(out)]) == 1
+    assert "run `beta holds" in capsys.readouterr().err  # nothing there yet
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    assert main(["contacts", str(path), "--out", str(out)]) == 1
+    assert "run `beta pose" in capsys.readouterr().err
+    scripted_pose(out, path, load_holds(out / "holds.json")[0])
+    doc = load_json(out / "holds.json")
+    doc["camera"]["id"] = "000000000000"
+    save_json(out / "holds.json", doc)
+    assert main(["contacts", str(path), "--out", str(out)]) == 1
+    assert "different camera.json" in capsys.readouterr().err
+    src = imwrite(tmp_path / "wall.png", wall[0])
+    assert main(["holds", str(src), "--color", "green", "--out", str(out)]) == 0
+    assert main(["contacts", str(path), "--out", str(out)]) == 1
+    assert "made from an image" in capsys.readouterr().err
