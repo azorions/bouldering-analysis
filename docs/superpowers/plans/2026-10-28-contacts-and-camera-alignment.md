@@ -510,7 +510,7 @@ git commit -m "feat(cli): add the align command and its debug video"
   - `holds.detection_to_dict(det, source, camera: dict | None = None)` and `holds.save_holds(path, det, source, camera=None)`. When `camera` is given, the output gains a `"camera"` key.
   - `cli._camera_for(path, out_dir, info) -> CameraTrack`. It reuses `out_dir/camera.json` when its `source` has the same file name, header frame count, width and height. Otherwise it prints `Checking whether the camera moves ...`, estimates, saves, and calls `_print_camera`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/test_video.py`:
 
@@ -574,12 +574,12 @@ def test_holds_on_image_has_no_camera(wall, tmp_path):
     assert not (tmp_path / "o" / "camera.json").exists()
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_video.py tests/test_cli.py -k "read_frames or masked or holds_on or redo" -v`
 Expected: FAIL (`ImportError: masked_median`, and `KeyError: 'camera'`)
 
-- [ ] **Step 3: Implement the Task 4 interfaces**
+- [x] **Step 3: Implement the Task 4 interfaces**
 
 **`masked_median`**
 - Stack the images as float32, with NaN where the mask is 0.
@@ -602,12 +602,12 @@ Expected: FAIL (`ImportError: masked_median`, and `KeyError: 'camera'`)
 
 **`README.md` section 1:** for videos, `holds` checks whether the camera moved and aligns the frames first. Holds are numbered on the aligned wall view.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_video.py tests/test_cli.py -v`
 Expected: all pass, including the existing `test_holds_on_video_uses_median_background`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/video.py src/beta/holds.py src/beta/cli.py README.md tests/test_video.py tests/test_cli.py

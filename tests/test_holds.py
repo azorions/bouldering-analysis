@@ -157,6 +157,17 @@ def test_small_footholds_kept_by_default_and_flagged_when_limit_is_raised():
     assert len(det.near_limit()) == len(FOOT_CHIPS)
 
 
+def test_size_limits_follow_the_video_frame_on_a_bigger_wall_view():
+    # A moving camera's wall view can be up to 2x the frame each way, but a
+    # foothold is no bigger in it, so the limits must come from the frame size.
+    canvas = np.zeros((1080, 3840, 3), np.uint8)
+    canvas[:, :1920] = foot_chip_wall()
+    assert len(detect_holds(canvas, HoldSpec.from_color("green")).holds) < len(FOOT_CHIPS)
+    det = detect_holds(canvas, HoldSpec.from_color("green"), frame_size=(1920, 1080))
+    assert len(det.holds) == len(FOOT_CHIPS)
+    assert det.min_area_px == pytest.approx(2e-5 * 1920 * 1080)
+
+
 def test_border_hold_flagged_not_dropped(wall):
     image, truth = wall
     holds = detect(image, "green")

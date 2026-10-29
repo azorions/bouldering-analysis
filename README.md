@@ -26,12 +26,13 @@ Hold detection uses color: it finds the holds of one route by their HSV color.
 uv run python -m beta holds <video-or-image> --color green
 ```
 
-- For a video, holds are detected on the **median background**: the per-pixel median of 25 frames spread over the clip. With a static camera this erases the moving climber, so holds hidden under hands are still found. Use `--frame N` to detect on a single frame instead.
+- For a video, `holds` first checks whether the camera moved (see [Camera movement](#camera-movement)), or reuses the folder's `camera.json` if it was made from the same clip. If the camera moved, each frame is aligned onto one view of the wall first, so holds are found and numbered on that aligned wall view, which can be bigger than one frame.
+- Holds are detected on the **median background**: the per-pixel median of 25 frames spread over the clip. The wall stands still (or has been aligned to), so this erases the moving climber, and holds hidden under hands are still found. Use `--frame N` to detect on a single frame instead.
 - Color presets: red, orange, yellow, green, blue, purple, pink, white, black. White and black are unreliable, because they match on brightness alone.
 - Output goes to `outputs/<input name>/`:
   - `holds.json`: hold polygons, numbered bottom to top.
   - `holds_debug.png`: numbered outlines on the left, the color mask on the right (green = kept, red = rejected).
-  - `background.png`: the image the holds were detected on.
+  - `background.png`: the image the holds were detected on (the aligned wall view for a moving camera).
 
 The presets are only starting points: lighting, white balance and the camera all shift colors. If holds are missed or extra ones appear, read a hold's real color and use a custom range. Take X,Y from **`background.png`** (full-resolution pixels), not from the downscaled `holds_debug.png`, and click on a colorful part of the hold rather than chalk or shadow:
 

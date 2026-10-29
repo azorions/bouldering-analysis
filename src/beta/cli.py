@@ -12,7 +12,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-from beta.align import CameraTrack, estimate_camera, save_camera, write_align_video
+from beta.align import CameraTrack, camera_ref, estimate_camera, load_camera, save_camera, write_align_video
 from beta.holds import (
     PRESETS,
     UNRELIABLE_COLORS,
@@ -91,11 +91,16 @@ def _blobs(n: int) -> str:
     return "1 blob was" if n == 1 else f"{n} blobs were"
 
 
-def _source_note(source: dict[str, Any]) -> str:
+def _source_note(source: dict[str, Any], camera: CameraTrack | None = None) -> str:
     name = Path(source["path"]).name
     size = f"{source['width']}x{source['height']}"
     if source["kind"] == "image":
         return f"source: {name} (image, {size})"
+    if camera is not None and camera.mode == "moving":
+        view = f"{camera.canvas[0]}x{camera.canvas[1]} wall view"
+        if source["frame"] is not None:
+            return f"source: {name} frame {source['frame']}, aligned ({view})"
+        return f"source: {name}, median of {source['background_frames']} aligned frames ({view})"
     if source["frame"] is not None:
         return f"source: {name} frame {source['frame']} ({size})"
     return f"source: {name}, median of {source['background_frames']} frames ({size})"
@@ -115,7 +120,11 @@ def cmd_holds(args: argparse.Namespace) -> int:
     if args.frame is not None and is_image(args.input):
         print("warning: --frame is ignored for image input", file=sys.stderr)
 
-    image, source = load_input(args.input, frame=args.frame, bg_frames=args.bg_frames)
+    out_dir = args.out or default_out_dir(args.input)
+    camera = None
+    if not is_image(args.input) and args.input.suffix.lower() not in UNSUPPORTED_PHOTO_EXTS:  # load_input explains HEIC
+        camera = _camera_for(args.input, out_dir, probe(args.input))
+    image, source = load_input(args.input, frame=args.frame, bg_frames=args.bg_frames, camera=camera)
 
     if args.sample is not None:
         x, y = args.sample
@@ -132,13 +141,13 @@ def cmd_holds(args: argparse.Namespace) -> int:
             if smp.note:
                 print(f"  note: {smp.note}")
 
-    det = detect_holds(image, spec)
+    # Size limits are fractions of the video frame, even on a bigger wall view.
+    det = detect_holds(image, spec, frame_size=(source["width"], source["height"]))
 
-    out_dir = args.out or default_out_dir(args.input)
     marks = [args.sample] if args.sample is not None else []
     written = [
-        save_holds(out_dir / "holds.json", det, source),
-        imwrite(out_dir / "holds_debug.png", draw_holds_debug(image, det, note=_source_note(source), marks=marks)),
+        save_holds(out_dir / "holds.json", det, source, camera=None if camera is None else camera_ref(camera)),
+        imwrite(out_dir / "holds_debug.png", draw_holds_debug(image, det, note=_source_note(source, camera), marks=marks)),
         imwrite(out_dir / "background.png", image),
     ]
 
@@ -214,6 +223,32 @@ def _print_camera(cam: CameraTrack) -> None:
     print(f"  Took {s['seconds']:.1f} s ({1000 * s['seconds'] / max(total, 1):.0f} ms per frame)")
 
 
+def _align(path: Path, info: VideoInfo, out_dir: Path, anchor_every_s: float = 1.0) -> tuple[CameraTrack, Path]:
+    """Estimate the camera and save it to ``out_dir/camera.json``."""
+    print(f"Checking whether the camera moves in {path.name} ...")
+    cam = estimate_camera(path, info, anchor_every_s=anchor_every_s, progress=_progress(info.frame_count))
+    if cam.mode == "moving" and sys.stderr.isatty():
+        print(file=sys.stderr)  # end the frame counter's line
+    return cam, save_camera(out_dir / "camera.json", cam, _video_source(path, info), {"anchor_every_s": anchor_every_s})
+
+
+def _camera_for(path: Path, out_dir: Path, info: VideoInfo) -> CameraTrack:
+    """The camera from ``out_dir/camera.json`` if it was made from this clip, otherwise estimated and saved now."""
+    saved = out_dir / "camera.json"
+    if saved.is_file():
+        try:
+            cam, doc = load_camera(saved)
+            src = doc["source"]
+            made_from = (Path(src["path"]).name, src["frame_count"], src["width"], src["height"])
+        except (KeyError, TypeError, ValueError):  # an old format or a hand edit gone wrong: make a new one
+            made_from = None
+        if made_from == (path.name, info.frame_count, info.width, info.height):
+            return cam
+    cam, _ = _align(path, info, out_dir)
+    _print_camera(cam)
+    return cam
+
+
 def cmd_align(args: argparse.Namespace) -> int:
     path: Path = args.input
     if is_image(path) or path.suffix.lower() in UNSUPPORTED_PHOTO_EXTS:
@@ -223,11 +258,8 @@ def cmd_align(args: argparse.Namespace) -> int:
     if out_dir.exists() and not out_dir.is_dir():
         raise ValueError(f"output folder {out_dir} is a file")
 
-    print(f"Checking whether the camera moves in {path.name} ...")
-    cam = estimate_camera(path, info, anchor_every_s=args.anchor_every, progress=_progress(info.frame_count))
-    if cam.mode == "moving" and sys.stderr.isatty():
-        print(file=sys.stderr)  # end the frame counter's line
-    written = [save_camera(out_dir / "camera.json", cam, _video_source(path, info), {"anchor_every_s": args.anchor_every})]
+    cam, camera_path = _align(path, info, out_dir, args.anchor_every)
+    written = [camera_path]
     if cam.mode == "moving" and not args.no_video:
         written.append(write_align_video(path, cam, out_dir / "align_debug.mp4"))
 

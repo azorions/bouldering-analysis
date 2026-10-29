@@ -6,16 +6,17 @@ import sys
 from dataclasses import replace
 from urllib.error import URLError
 
+import numpy as np
 import pytest
-from conftest import FOOT_CHIPS, FakeLandmarker, FakeResponse, foot_chip_wall
+from conftest import FOOT_CHIPS, FakeLandmarker, FakeResponse, foot_chip_wall, inside
 
 from beta import cli, pose, video
-from beta.align import load_camera
+from beta.align import apply_h, load_camera
 from beta.cli import main
-from beta.holds import load_holds
+from beta.holds import HoldSpec, detect_holds, load_holds
 from beta.jsonio import load_json
 from beta.pose import load_pose
-from beta.video import imread, imwrite, probe
+from beta.video import imread, imwrite, median_background, probe
 
 
 def test_holds_on_image_writes_outputs(wall, tmp_path, capsys):
@@ -298,3 +299,43 @@ def test_align_no_video_and_bad_options(moving_video, tmp_path, capsys):
     assert "align needs a video" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         main(["align", "clip.mp4", "--anchor-every", "0"])
+
+
+def test_holds_on_moving_clip_find_every_route_hold(moving_video, tmp_path, capsys):
+    path, truth = moving_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    holds, doc = load_holds(out / "holds.json")
+    cam, _ = load_camera(out / "camera.json")
+    assert doc["camera"] == {"id": cam.id, "mode": "moving", "canvas": list(cam.canvas)}
+    assert doc["source"]["width"] == 640 and "Checking whether the camera moves" in capsys.readouterr().out
+    # Size limits come from the video frame, not the bigger wall view.
+    assert doc["params"]["max_area_px"] == pytest.approx(0.03 * 640 * 480, abs=0.1)
+    to_wall = cam.frame_to_wall(cam.reference_frame) @ truth.wall_to_frame[cam.reference_frame]
+    route = [t for t in truth.wall.of_color("green") if t.kind != "border"]
+    centers = apply_h(to_wall, np.array([t.center for t in route]))
+    visible = [c for c in centers if 0 <= c[0] < cam.canvas[0] and 0 <= c[1] < cam.canvas[1]]
+    assert visible and all(any(inside(h, c) for h in holds) for c in visible)
+
+
+def test_holds_on_still_clip_are_unchanged(climb_video, tmp_path):
+    path, _ = climb_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    holds, doc = load_holds(out / "holds.json")
+    expected = detect_holds(median_background(path)[0], HoldSpec.from_color("green")).holds
+    assert doc["camera"]["mode"] == "still" and holds == expected
+
+
+def test_holds_redo_alignment_for_another_video(climb_video, moving_video, tmp_path):
+    out = tmp_path / "out"
+    assert main(["align", str(moving_video[0]), "--out", str(out), "--no-video"]) == 0
+    assert main(["holds", str(climb_video[0]), "--color", "green", "--out", str(out)]) == 0
+    assert load_camera(out / "camera.json")[0].mode == "still"
+
+
+def test_holds_on_image_has_no_camera(wall, tmp_path):
+    src = imwrite(tmp_path / "wall.png", wall[0])
+    assert main(["holds", str(src), "--color", "green", "--out", str(tmp_path / "o")]) == 0
+    assert "camera" not in load_json(tmp_path / "o" / "holds.json")
+    assert not (tmp_path / "o" / "camera.json").exists()

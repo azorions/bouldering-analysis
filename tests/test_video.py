@@ -16,6 +16,7 @@ from beta.video import (
     imwrite,
     iter_frames,
     load_input,
+    masked_median,
     median_background,
     probe,
     read_frame,
@@ -52,6 +53,15 @@ def test_read_frames_returns_exact_indices(climb_video):  # Review Focus 1
     frames = read_frames(climb_video[0], [30, 0, 7, 99])
     assert [i for i, _ in frames] == [0, 7, 30]
     assert [round(float(f[:12, :12].mean())) for _, f in frames] == pytest.approx([0, 56, 240], abs=4)
+
+
+def test_masked_median_ignores_uncovered_pixels():
+    full, half, none = (np.full((2, 4), 255, np.uint8), np.zeros((2, 4), np.uint8), np.zeros((2, 4), np.uint8))
+    half[:, :2] = 255
+    imgs = [np.full((2, 4, 3), v, np.uint8) for v in (10, 20, 200, 99)]
+    out = masked_median(imgs, [full, full, half, none])
+    assert out[0, 0, 0] == 20 and out[0, 3, 0] == 15
+    assert masked_median(imgs[:1], [none])[0, 0, 0] == 0
 
 
 def test_iter_frames_is_sequential(climb_video):
