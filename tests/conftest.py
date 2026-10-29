@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from beta.holds import Hold
+from beta.pose import PoseFrame, PoseTrack
 from beta.synthetic import (
     HOLD_HSV,
     TrueHold,
@@ -68,6 +69,41 @@ def match(holds: list[Hold], truth: list[TrueHold]) -> list[list[int]]:
 def expected_order(truth: list[TrueHold]) -> list[TrueHold]:
     """True holds in the order they should be numbered: bottom to top, then left to right."""
     return sorted(truth, key=lambda t: (-t.center[1], t.center[0]))
+
+
+XY = tuple[float, float]
+
+
+def body(hands: tuple[XY, XY], feet: tuple[XY, XY], torso: float = 100.0, vis: float = 0.9) -> np.ndarray:
+    """A (33, 5) pose of a climber seen from behind, hands and feet where given.
+
+    ``hands`` and ``feet`` are (left, right), the climber's own. Wrist, knuckles
+    and thumb sit on the hand point and toe and heel on the foot point, so the
+    hand and foot effectors land exactly there. The hips are centred ``torso``
+    above the feet, with the climber's left on the image left, and the
+    shoulders ``torso`` above the hips.
+    """
+    (lhx, lhy), (rhx, rhy) = hands
+    (lfx, lfy), (rfx, rfy) = feet
+    lm = np.zeros((33, 5))
+    lm[:, 3], lm[:, 4] = vis, 0.95
+    hip_x, hip_y = (lfx + rfx) / 2, (lfy + rfy) / 2 - torso
+    shoulder_y = hip_y - torso
+    lm[23, :2], lm[24, :2] = (hip_x - 0.2 * torso, hip_y), (hip_x + 0.2 * torso, hip_y)
+    lm[11, :2], lm[12, :2] = (hip_x - 0.25 * torso, shoulder_y), (hip_x + 0.25 * torso, shoulder_y)
+    lm[0:11, :2] = (hip_x, shoulder_y - 0.4 * torso)  # face
+    lm[[15, 17, 19, 21], :2] = (lhx, lhy)  # wrist, pinky, index, thumb
+    lm[[16, 18, 20, 22], :2] = (rhx, rhy)
+    lm[[29, 31], :2], lm[27, :2] = (lfx, lfy), (lfx, lfy - 10)  # heel and toe, ankle
+    lm[[30, 32], :2], lm[28, :2] = (rfx, rfy), (rfx, rfy - 10)
+    lm[13, :2], lm[14, :2] = (lm[11, :2] + lm[15, :2]) / 2, (lm[12, :2] + lm[16, :2]) / 2  # elbows
+    lm[25, :2], lm[26, :2] = (lm[23, :2] + lm[27, :2]) / 2, (lm[24, :2] + lm[28, :2]) / 2  # knees
+    return lm
+
+
+def track_of(frames: list[np.ndarray | None], fps: float = 30.0, width: int = 640, height: int = 480) -> PoseTrack:
+    """A PoseTrack with one frame per entry (None = no pose found)."""
+    return PoseTrack([PoseFrame(i, round(1000 * i / fps), lm) for i, lm in enumerate(frames)], fps, width, height)
 
 
 # Landmark offsets from the synthetic climber's center, as fractions of the frame

@@ -775,7 +775,7 @@ Use the hold numbers from `holds_debug.png`.
       - Visibility is `vis`, presence 0.95.
     - `track_of(frames: list[np.ndarray | None], fps=30.0, width=640, height=480) -> PoseTrack`.
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_limbs.py`
+- [x] **Step 1: Write the failing tests** in `tests/test_limbs.py`
 
 ```python
 import numpy as np, pytest
@@ -857,12 +857,12 @@ def test_hip_centers():
     assert np.allclose(hip_centers(body(HANDS, FEET)[None])[0], (250, 300))
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_limbs.py -v`
 Expected: FAIL (`ModuleNotFoundError: beta.limbs`)
 
-- [ ] **Step 3: Implement `src/beta/limbs.py`**
+- [x] **Step 3: Implement `src/beta/limbs.py`**
 
 **Left/right pairs** (left, right):
 - Face: (1,4), (2,5), (3,6), (7,8), (9,10).
@@ -884,12 +884,12 @@ Expected: FAIL (`ModuleNotFoundError: beta.limbs`)
 
 The docstring explains why: MediaPipe confuses sides on climbers seen from behind.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_limbs.py -v`
 Expected: 12 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/limbs.py tests/conftest.py tests/test_limbs.py
