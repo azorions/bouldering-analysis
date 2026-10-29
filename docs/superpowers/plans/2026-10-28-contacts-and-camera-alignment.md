@@ -1055,7 +1055,7 @@ git commit -m "feat(contacts): detect when each limb is on a hold"
   - `feet_on_floor(feet, feet_seen, feet_busy (F,2), floor_y, torso) -> (F,2) bool`.
   - `find_attempts(contacts: dict[str, list[Contact]], on_floor: np.ndarray | None, hips (F,2), holds, torso, fps, top_hold: int | None = None) -> list[Attempt]`.
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_attempts.py`
+- [x] **Step 1: Write the failing tests** in `tests/test_attempts.py`
 
 These use direct arrays at 30 fps with torso 100. Holds come from `square_hold`, ids 1–20, placed so that a higher id is higher on the wall. Hold 20 is the top. Every hold's bbox bottom is ≤ 850.
 
@@ -1147,12 +1147,12 @@ def test_single_attempt_without_a_floor():
     assert len(a) == 1 and a[0].start_frame == 40 and a[0].outcome == "clip_ended"
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_attempts.py -v`
 Expected: FAIL (`ModuleNotFoundError: beta.attempts`)
 
-- [ ] **Step 3: Implement `src/beta/attempts.py`**
+- [x] **Step 3: Implement `src/beta/attempts.py`**
 
 Put the reasoning for each heuristic in its docstring.
 
@@ -1196,12 +1196,12 @@ high_point: max hold id among hand contacts; fall.last_holds: per limb, the hold
 end >= fall_frame - LAST_HOLDS_S*fps and start <= fall_frame; release_order: those contacts by end frame
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_attempts.py -v`
 Expected: 13 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/attempts.py tests/test_attempts.py
