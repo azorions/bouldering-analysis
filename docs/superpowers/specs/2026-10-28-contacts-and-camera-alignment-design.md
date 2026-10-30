@@ -500,3 +500,78 @@ New checks:
 - **Partly detected holds.** The release margin forgives a lot, but the onset
   margin is only ~5 px here.
 - **Parallax and large view changes** (see Non-goals).
+
+## Tuning log
+
+Changes made from evidence on the real clip (`samples/bouldering_video_sample.mp4`, 576x1024, 1030 frames),
+in the order they were made. Frame numbers are video frames.
+
+**2026-10-29: alignment tracks from the last anchor, not frame to frame** (`align.estimate_camera`)
+- Old: KLT chained from each frame to the next between SIFT anchors. New: every frame is tracked from the last
+  anchored frame's corners (keyframe tracking).
+- Evidence: chaining gave anchor corrections of median 2.38 / p90 10.4 / max 28.7 px at 26 ms per frame;
+  keyframe tracking gives 0.80 / 1.50 / 6.3 px at 17 ms per frame.
+- Reason: the goals (median correction ≤ ~1 px, ≤ ~25 ms per frame) bind over this spec's description of the
+  mechanism. The user-facing design (cheap point following plus a SIFT check about once a second) is unchanged.
+
+**2026-10-29: `STILL_SAMPLES` 25 → 9** (`align.py`)
+- Evidence: 25 samples took ~4 s on the real clip (2.0 s seeking, 1.9 s SIFT), against the 1-2 s target for a
+  still clip. With 9, the synthetic still clip takes 1.3 s (measured 2026-10-30).
+- Cost: a camera that moves and comes back to the same view between two samples is missed.
+
+**2026-10-29: new `TRACK_MIN_INLIERS = 100`** (`align.py`)
+- Re-anchor as soon as tracking falls below 100 agreeing points ("re-anchor immediately whenever tracking is weak").
+- Evidence: with only `MIN_INLIERS = 30`, a fast pan gave a 31-inlier fit 1.6 px off.
+
+**2026-10-29: hold size limits are fractions of the video frame** (`holds.detect_holds(frame_size=...)`)
+- Old: fractions of the image holds are detected on, which for a moving camera is the bigger wall view.
+- Evidence: the wall view is 659x1350 against a 576x1024 frame, so the smallest hold allowed grew 1.5x.
+- Reason: a hold is as big in the wall view as in the frame; `--min-area-frac` is documented as a fraction of the frame.
+
+**2026-10-29: hold detection settings for this clip** (per clip, not defaults)
+- The route is cream/white. The `white` preset (S ≤ 40, V ≥ 190) missed cream holds (S up to 59) and split the
+  moon holds; glare on coloured holds and the lit wall looks white to HSV.
+- Command: `beta holds samples/bouldering_video_sample.mp4 --hsv-lower 0,0,170 --hsv-upper 179,65,255
+  --min-area-frac 2e-4 --max-area-frac 0.01 --roi 0,0,630,1350` (glare spots are 16-94 px², the smallest route hold
+  140 px²; the lit patch at the top right is ~10,000 px²; the ROI drops a lit strip at the right edge).
+- Left as is: the shaded sides of holds 10 and 12 aren't outlined (HSV can't reach shaded cream without the tan
+  plywood and grey mat).
+
+**2026-10-29: left/right continuity only compares clearly seen frames** (`limbs.fix_left_right`)
+- Old: each frame with a pose was compared with the previous one. New: only frames where both wrists (or both
+  ankles) have visibility ≥ 0.5, against the previous such frame within 0.2 s.
+- Evidence: in frames 800-803 (the fall, visibility ~0.3) MediaPipe mirrored the whole body while the hands had
+  just been together, so nothing was swapped; the correct frame 807 then looked crossed, was "fixed" wrong, and the
+  error carried through frame 910 (100 frames, including frame 869 with both wrists at visibility 0.7+). After the
+  change: no arm swaps, and two leg swaps (frames 340 and 343, one-frame ankle flickers, fixed correctly).
+- Cost: a flip while MediaPipe is guessing isn't undone; those points don't count as seen for contacts anyway.
+
+**2026-10-30: the floor also comes from a standing start** (`attempts.estimate_floor`)
+- Old: candidates only where no hand is on a hold; the floor is the highest level with ≥ `SETTLE_S` of support.
+- New: candidates are feet below every hold and not on one. With the hands free, the floor is the highest
+  well-supported level (ignores a walk toward the camera); with a hand on a hold, the lowest (ignores a foot on a
+  volume the hold detection missed). When both exist, the higher one wins.
+- Evidence: the clip starts with both hands on hold 8 and the right foot on the mat (frames 0-25), and the right
+  foot goes back to the mat while hanging on 8 (frames 96-218): 136 still, seen frames at y 1032-1048, all with a
+  hand on a hold. With the hands free there were only 6 candidates (LF) and 0 (RF), against the 8 needed: landing
+  (753-773) is fast, sitting (774-894) hides both feet (toe visibility ~0.1-0.2), and standing up (895-924) is a
+  step in front of the wall (~1072). Loosening `max_speed` instead gives that ~1072 level, too low.
+- Result: floor y = 1041, at the wall base in `background.png`; attempt 1 is frames 26-752, fell; nothing counted
+  after the fall; no second attempt. A foot on an undetected volume below the lowest hold (tested) doesn't become
+  the floor.
+
+**2026-10-30: `min_visibility` stays 0.5; LH on 13 and RF on 10 are missed** (no change)
+- LH on 13 (frames ~463-478): the left hand matches on 13 behind the climber's head; wrist visibility 0.05-0.35
+  throughout. The guessed point is on the outline and slow, so only the visibility gate blocks it.
+- RF on 10 (frames ~616-660): the shoe stands on the lit top of 10, which is outlined; toe visibility 0.17-0.47
+  (trouser hem over the shoe). Forcing RF seen on frames 628-656 with the current outline gives RF 8, 10, so the
+  partial outline is not the cause. Because 10 is never seen, RF's contact on 8 runs on to frame 743 (the point
+  stays within the 0.25-torso release margin of 8) and the fall reports RF's last hold as 8.
+- Rejected: `min_visibility` 0.2 recovers both, but correct timing for 13 exists only at 0.20-0.21 (0.22-0.27 holds
+  13 ~1.8 s too long); at 0.2 LH's contact on 16 splits at a pose glitch (frames 593-597) and the fall's last
+  holds change. A "still point" rescue (seen at visibility ≥ 0.15 while slow) gets RF 10 but is in effect a 0.15
+  threshold for slow frames, fitted to this stay's minimum of 0.167 (it fails at 0.20).
+- Idea for later: count a low-visibility point as seen when the wall pixels under it (in the warped frame) differ
+  from `background.png`, i.e. something really covers the hold there.
+- Acceptance on this clip: RH 8, 12, 13 and LF 9, 8 match the answer key; LH 8, 12, 16 (key 8, 12, 13, 16) and RF 8
+  (key 8, 10) miss one hidden contact each; outcome `fell` at 25.1 s matches.

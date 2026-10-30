@@ -1433,7 +1433,7 @@ git commit -m "feat(cli): add the contacts command, contacts.json and the timeli
 - Modify (only if tuning is needed): `src/beta/contacts.py` (`ContactParams` defaults), `src/beta/attempts.py` (constants)
 - Modify: `docs/superpowers/specs/2026-10-28-contacts-and-camera-alignment-design.md` (append a "Tuning log")
 
-- [ ] **Step 1: Run contacts on the real clip**
+- [x] **Step 1: Run contacts on the real clip**
 
 Run: `uv run beta contacts samples/bouldering_video_sample.mp4 --top-hold <top_hold from the truth file>`
 
@@ -1442,7 +1442,7 @@ Expected:
 - Nothing counted after the fall.
 - Each limb's sequence equals `samples/bouldering_video_sample.truth.json`.
 
-- [ ] **Step 2: Diagnose each mismatch with `contacts_debug.png` and `pose_debug.mp4`**
+- [x] **Step 2: Diagnose each mismatch with `contacts_debug.png` and `pose_debug.mp4`**
 
 For each mismatch, find which of these caused it:
 - a grey (unseen) stretch;
@@ -1451,16 +1451,16 @@ For each mismatch, find which of these caused it:
 
 Change a threshold only when that is the cause. Then rerun `uv run pytest`, since the defaults are pinned in tests, so update those tests together with the default.
 
-- [ ] **Step 3: Record each change**
+- [x] **Step 3: Record each change**
 
 Append a `## Tuning log` section to the design doc. Each entry gives the date, the setting, the old and new value, the evidence (frame numbers and what the debug output showed) and the reason.
 
-- [ ] **Step 4: Check the timing goals**
+- [x] **Step 4: Check the timing goals**
 
 - In the Task 6 `beta align` output, the moving clip should show ≤ ~25 ms per frame.
 - Run `uv run beta align samples/synthetic_climb.avi`. Expected: `Camera is still`, taking about 2 s or less.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A src docs tests
