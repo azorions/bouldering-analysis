@@ -42,6 +42,9 @@ def test_sequence_merges_regrips():
     assert a.sequence()["LH"] == [7, 9]
 
 
+FREE_FEET = np.zeros((F, 2), bool)  # no foot on a hold
+
+
 def test_floor_is_where_feet_rest_with_hands_free():
     # A short rest at the wall (900), climbing (600), then a much longer stand near the camera (1050).
     feet = np.full((F, 2, 2), 900.0)
@@ -49,12 +52,33 @@ def test_floor_is_where_feet_rest_with_hands_free():
     feet[90:, :, 1] = 1050.0
     busy = np.zeros(F, bool)
     busy[30:90] = True
-    assert estimate_floor(feet, np.ones((F, 2), bool), busy, HOLDS, TORSO, FPS) == pytest.approx(900.0, abs=1)
+    assert estimate_floor(feet, np.ones((F, 2), bool), busy, FREE_FEET, HOLDS, TORSO, FPS) == pytest.approx(900.0, abs=1)
 
 
 def test_no_floor_without_resting_feet():
     feet = np.full((F, 2, 2), 600.0)
-    assert estimate_floor(feet, np.ones((F, 2), bool), np.zeros(F, bool), HOLDS, TORSO, FPS) is None
+    assert estimate_floor(feet, np.ones((F, 2), bool), np.zeros(F, bool), FREE_FEET, HOLDS, TORSO, FPS) is None
+
+
+def test_floor_from_a_standing_start():
+    # Hands on the start holds and the left foot on a hold, the right foot on the floor (900);
+    # climbing (600); then a long stand near the camera (1050) with the hands free.
+    feet = np.full((F, 2, 2), 600.0)
+    feet[:60, 1, 1] = 900.0
+    feet[150:, :, 1] = 1050.0
+    hands = np.zeros(F, bool)
+    hands[:150] = True
+    feet_busy = np.zeros((F, 2), bool)
+    feet_busy[:150, 0] = True
+    feet_busy[60:150, 1] = True
+    assert estimate_floor(feet, np.ones((F, 2), bool), hands, feet_busy, HOLDS, TORSO, FPS) == pytest.approx(900.0, abs=1)
+
+
+def test_a_foot_on_a_volume_below_the_holds_is_not_the_floor():
+    # Hands on, the left foot resting on a volume (860) the hold detection didn't find, the right foot on the floor (900).
+    feet = np.full((F, 2, 2), 900.0)
+    feet[:, 0, 1] = 860.0
+    assert estimate_floor(feet, np.ones((F, 2), bool), np.ones(F, bool), FREE_FEET, HOLDS, TORSO, FPS) == pytest.approx(900.0, abs=1)
 
 
 def test_feet_on_floor_carry_through_unseen_frames():

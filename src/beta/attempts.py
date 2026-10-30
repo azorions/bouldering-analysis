@@ -77,46 +77,67 @@ def _first_run(flags: np.ndarray, start: int, length: int) -> int | None:
     return None
 
 
+def _floor_level(ys: np.ndarray, torso: float, need: int, lowest: bool) -> float | None:
+    """Group foot y values into levels ``FLOOR_TOLERANCE`` torso lengths tall and pick the highest
+    (or ``lowest``) level with at least ``need`` of them: the median of it and its two neighbours."""
+    if not ys.size:
+        return None
+    levels = np.floor(ys / (FLOOR_TOLERANCE * torso)).astype(int)
+    supported = [lv for lv in sorted(set(levels.tolist())) if (levels == lv).sum() >= need]  # top of the image down
+    if not supported:
+        return None
+    level = supported[-1] if lowest else supported[0]
+    return float(np.median(ys[np.abs(levels - level) <= 1]))
+
+
 def estimate_floor(
-    feet: np.ndarray, feet_seen: np.ndarray, hands_busy: np.ndarray, holds: Sequence[Hold], torso: float, fps: float
+    feet: np.ndarray,
+    feet_seen: np.ndarray,
+    hands_busy: np.ndarray,
+    feet_busy: np.ndarray,
+    holds: Sequence[Hold],
+    torso: float,
+    fps: float,
 ) -> float | None:
-    """The floor's y in wall coordinates, from where the feet stand still with the hands free.
+    """The floor's y in wall coordinates, from where a foot stands still off the holds.
 
-    ``feet`` is (F, 2, 2): left and right foot points. Candidates are frames
-    where a foot is seen, still, below every hold, and no hand is on a hold
-    (so the climber isn't on the wall). They are grouped into levels
-    ``FLOOR_TOLERANCE`` torso lengths tall, and the floor is the highest
-    level with enough of them (``SETTLE_S`` worth of frames).
+    ``feet`` is (F, 2, 2): left and right foot points; ``feet_busy`` (F, 2)
+    says when each foot is on a hold. Candidates are frames where a foot is
+    seen, still, below every hold and not on one. They come in two kinds,
+    each read differently, and each needs ``SETTLE_S`` worth of frames:
 
-    Why the highest well-supported level and not, say, a percentile: someone
-    walking towards the camera has their feet lower in the image only because
-    they're closer to it. On the real clip that walk is much longer than any
-    rest at the wall, so it would drag a percentile down. The floor at the
-    wall is the highest place feet stand still when they're not on a hold.
+    - **Hands free:** the climber is off the wall, and may be walking towards
+      the camera. Feet are then lower in the image only because they're
+      closer to it, so the floor is the highest well-supported level. (On the
+      real clip the walk is long enough to drag a percentile down.)
+    - **A hand on a hold:** the climber is at the wall, e.g. a standing start
+      with one foot still on the floor. A foot can't be closer to the camera
+      then, but it can rest on a volume or jib the hold detection didn't find,
+      so here the floor is the lowest well-supported level.
 
-    None if feet never rest like that (the clip starts and ends on the wall).
+    The floor is the higher of the two when both exist, since both kinds of
+    mistake (a step in front of the wall, a foot back from it) read too low.
+    None if no foot ever rests like that.
     """
     from beta.contacts import ContactParams, limb_speed  # contacts.py imports this module
 
     lowest_hold = max((h.bbox[1] + h.bbox[3] for h in holds), default=-np.inf)
     max_speed = ContactParams().max_speed
-    candidates = []
+    free, at_wall = [], []
     for k in range(2):
         speed = limb_speed(feet[:, k], fps, torso)
         y = feet[:, k, 1]
         with np.errstate(invalid="ignore"):  # NaN points are never candidates
-            ok = feet_seen[:, k] & ~hands_busy & (speed < max_speed) & (y > lowest_hold)
-        candidates.append(y[ok])
-    ys = np.concatenate(candidates)
-    if not ys.size:
-        return None
-    level_h = FLOOR_TOLERANCE * torso
-    levels = np.floor(ys / level_h).astype(int)
+            ok = feet_seen[:, k] & ~feet_busy[:, k] & (speed < max_speed) & (y > lowest_hold)
+        free.append(y[ok & ~hands_busy])
+        at_wall.append(y[ok & hands_busy])
     need = math.ceil(SETTLE_S * fps)
-    for level in sorted(set(levels.tolist())):  # top of the image down
-        if (levels == level).sum() >= need:
-            return float(np.median(ys[np.abs(levels - level) <= 1]))
-    return None
+    found = [
+        level
+        for level in (_floor_level(np.concatenate(free), torso, need, lowest=False), _floor_level(np.concatenate(at_wall), torso, need, lowest=True))
+        if level is not None
+    ]
+    return min(found) if found else None  # the higher one: smaller y is higher up
 
 
 def feet_on_floor(feet: np.ndarray, feet_seen: np.ndarray, feet_busy: np.ndarray, floor_y: float, torso: float) -> np.ndarray:

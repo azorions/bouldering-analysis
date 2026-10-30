@@ -210,15 +210,15 @@ def analyze(
     contacts = {limb: detect_contacts(limb, points[:, k], seen[:, k], holds, torso, fps, params) for k, limb in enumerate(LIMBS)}
 
     n = len(lm)
+    feet_busy = np.column_stack([busy_frames(contacts["LF"], n), busy_frames(contacts["RF"], n)])
     if floor_y is not None:
         source = "--floor-y"
     else:
         hands_busy = busy_frames(contacts["LH"] + contacts["RH"], n)
-        floor_y = estimate_floor(points[:, 2:], seen[:, 2:], hands_busy, holds, torso, fps)
+        floor_y = estimate_floor(points[:, 2:], seen[:, 2:], hands_busy, feet_busy, holds, torso, fps)
         source = "estimated" if floor_y is not None else "not found"
     on_floor = None
     if floor_y is not None:
-        feet_busy = np.column_stack([busy_frames(contacts["LF"], n), busy_frames(contacts["RF"], n)])
         on_floor = feet_on_floor(points[:, 2:], seen[:, 2:], feet_busy, floor_y, torso)
     attempts = find_attempts(contacts, on_floor, hip_centers(lm), holds, torso, fps, top_hold)
     top = top_hold if top_hold is not None else max((h.id for h in holds), default=None)
