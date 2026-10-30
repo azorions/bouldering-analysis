@@ -6,15 +6,17 @@ import sys
 from dataclasses import replace
 from urllib.error import URLError
 
+import numpy as np
 import pytest
-from conftest import FOOT_CHIPS, FakeLandmarker, FakeResponse, foot_chip_wall
+from conftest import FOOT_CHIPS, FakeLandmarker, FakeResponse, body, foot_chip_wall, inside, track_of
 
 from beta import cli, pose, video
+from beta.align import apply_h, load_camera
 from beta.cli import main
-from beta.holds import load_holds
-from beta.jsonio import load_json
-from beta.pose import load_pose
-from beta.video import imread, imwrite, probe
+from beta.holds import HoldSpec, detect_holds, load_holds
+from beta.jsonio import load_json, save_json
+from beta.pose import load_pose, save_pose
+from beta.video import imread, imwrite, median_background, probe
 
 
 def test_holds_on_image_writes_outputs(wall, tmp_path, capsys):
@@ -180,7 +182,7 @@ def test_pose_draws_holds_from_the_output_dir(climb_video, tmp_path, fake_model,
     assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
     drawn = []
 
-    def write_video(src, track, out_path, holds=()):
+    def write_video(src, track, out_path, holds=(), camera=None):
         drawn.extend(holds)
         return out_path
 
@@ -202,6 +204,38 @@ def test_pose_skips_holds_from_an_image_of_another_size(climb_video, wall, tmp_p
     captured = capsys.readouterr()
     assert "made from a 1280x960 image but the video is 640x480" in captured.err
     assert "drawn on the video" not in captured.out
+
+
+def _pose_with_fake_video(path, out, tmp_path, monkeypatch) -> dict:
+    """Run `pose` with a fake model; returns what reached write_pose_video."""
+    seen = {}
+    monkeypatch.setattr(cli, "open_landmarker", lambda p, c: FakeLandmarker(45))
+    monkeypatch.setattr(cli, "write_pose_video", lambda s, t, o, holds=(), camera=None: seen.update(holds=holds, camera=camera) or o)
+    model = tmp_path / "fake.task"
+    model.write_bytes(b"x")
+    assert main(["pose", str(path), "--model-path", str(model), "--out", str(out)]) == 0
+    return seen
+
+
+def test_pose_uses_the_camera_for_moving_holds(moving_video, tmp_path, monkeypatch):
+    path, _ = moving_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    seen = _pose_with_fake_video(path, out, tmp_path, monkeypatch)
+    assert seen["holds"] and seen["camera"].mode == "moving"
+
+
+def test_pose_skips_holds_from_another_alignment(moving_video, tmp_path, monkeypatch, capsys):
+    path, _ = moving_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    doc = load_json(out / "holds.json")
+    doc["camera"]["id"] = "000000000000"
+    save_json(out / "holds.json", doc)
+    capsys.readouterr()
+    seen = _pose_with_fake_video(path, out, tmp_path, monkeypatch)
+    assert "was made with a different camera.json" in capsys.readouterr().err
+    assert seen["holds"] == []
 
 
 def test_pose_rejects_photos_and_bad_options(tmp_path, capsys):
@@ -271,3 +305,135 @@ def test_pose_download_failure_is_a_clear_error(climb_video, tmp_path, monkeypat
     assert "Downloading the lite pose model" in captured.out
     assert "could not download the pose model" in captured.err and "--model-path" in captured.err
     assert list((tmp_path / "models").iterdir()) == []
+
+
+def test_align_on_still_clip(climb_video, tmp_path, capsys):
+    out = tmp_path / "out"
+    assert main(["align", str(climb_video[0]), "--out", str(out)]) == 0
+    assert load_camera(out / "camera.json")[0].mode == "still"
+    assert not (out / "align_debug.mp4").exists()
+    assert "Camera is still" in capsys.readouterr().out
+
+
+def test_align_on_moving_clip_writes_debug_video(moving_video, tmp_path, capsys):
+    out = tmp_path / "out"
+    assert main(["align", str(moving_video[0]), "--out", str(out)]) == 0
+    assert probe(out / "align_debug.mp4").frame_count == 45
+    printed = capsys.readouterr().out
+    assert "Camera moves: up to" in printed and "Aligned 45 of 45 frames" in printed and "ms per frame" in printed
+
+
+def test_align_no_video_and_bad_options(moving_video, tmp_path, capsys):
+    out = tmp_path / "out"
+    assert main(["align", str(moving_video[0]), "--out", str(out), "--no-video"]) == 0
+    assert (out / "camera.json").is_file() and not (out / "align_debug.mp4").exists()
+    assert main(["align", str(tmp_path / "wall.png")]) == 1
+    assert "align needs a video" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        main(["align", "clip.mp4", "--anchor-every", "0"])
+
+
+def test_holds_on_moving_clip_find_every_route_hold(moving_video, tmp_path, capsys):
+    path, truth = moving_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    holds, doc = load_holds(out / "holds.json")
+    cam, _ = load_camera(out / "camera.json")
+    assert doc["camera"] == {"id": cam.id, "mode": "moving", "canvas": list(cam.canvas)}
+    assert doc["source"]["width"] == 640 and "Checking whether the camera moves" in capsys.readouterr().out
+    # Size limits come from the video frame, not the bigger wall view.
+    assert doc["params"]["max_area_px"] == pytest.approx(0.03 * 640 * 480, abs=0.1)
+    to_wall = cam.frame_to_wall(cam.reference_frame) @ truth.wall_to_frame[cam.reference_frame]
+    route = [t for t in truth.wall.of_color("green") if t.kind != "border"]
+    centers = apply_h(to_wall, np.array([t.center for t in route]))
+    visible = [c for c in centers if 0 <= c[0] < cam.canvas[0] and 0 <= c[1] < cam.canvas[1]]
+    assert visible and all(any(inside(h, c) for h in holds) for c in visible)
+
+
+def test_holds_on_still_clip_are_unchanged(climb_video, tmp_path):
+    path, _ = climb_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    holds, doc = load_holds(out / "holds.json")
+    expected = detect_holds(median_background(path)[0], HoldSpec.from_color("green")).holds
+    assert doc["camera"]["mode"] == "still" and holds == expected
+
+
+def test_holds_redo_alignment_for_another_video(climb_video, moving_video, tmp_path):
+    out = tmp_path / "out"
+    assert main(["align", str(moving_video[0]), "--out", str(out), "--no-video"]) == 0
+    assert main(["holds", str(climb_video[0]), "--color", "green", "--out", str(out)]) == 0
+    assert load_camera(out / "camera.json")[0].mode == "still"
+
+
+def test_holds_on_image_has_no_camera(wall, tmp_path):
+    src = imwrite(tmp_path / "wall.png", wall[0])
+    assert main(["holds", str(src), "--color", "green", "--out", str(tmp_path / "o")]) == 0
+    assert "camera" not in load_json(tmp_path / "o" / "holds.json")
+    assert not (tmp_path / "o" / "camera.json").exists()
+
+
+def scripted_pose(out, path, holds, frames=31, hidden=()):
+    """Write a pose.json for the clip: hands on the top three holds (RH moves at frame 15), feet on the bottom two.
+
+    ``hidden`` landmarks get visibility 0.1 in every frame.
+    """
+    ordered = sorted(holds, key=lambda h: h.id)
+    hand, foot = ordered[-3:], ordered[:2]
+    lm = [body((hand[0].centroid, (hand[1] if t < 15 else hand[2]).centroid), (foot[0].centroid, foot[1].centroid)) for t in range(frames)]
+    for f in lm:
+        f[list(hidden), 3] = 0.1
+    src = {"path": path, "kind": "video", "fps": 15.0, "frame_count": frames, "width": 640, "height": 480, "bit_depth": 8}
+    save_pose(out / "pose.json", track_of(lm, fps=15.0), src, {})
+    return hand
+
+
+def test_contacts_end_to_end(climb_video, tmp_path, capsys):
+    path, _ = climb_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    hand = scripted_pose(out, path, load_holds(out / "holds.json")[0])
+    assert main(["contacts", str(path), "--out", str(out)]) == 0
+    doc = load_json(out / "contacts.json")
+    assert doc["attempts"][0]["sequence"]["RH"] == [hand[1].id, hand[2].id]
+    assert imread(out / "contacts_debug.png").size > 0
+    printed = capsys.readouterr().out
+    assert "Attempt 1: clip ended mid-attempt" in printed and f"RH: {hand[1].id}, {hand[2].id}" in printed
+
+
+def test_contacts_accepts_pose_with_fewer_frames_than_the_header(climb_video, tmp_path):  # Review Focus 2
+    path, _ = climb_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    scripted_pose(out, path, load_holds(out / "holds.json")[0], frames=30)
+    assert main(["contacts", str(path), "--out", str(out)]) == 0
+
+
+def test_limb_never_seen(climb_video, tmp_path, capsys):  # Review Focus 5
+    path, _ = climb_video
+    out = tmp_path / "out"
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    scripted_pose(out, path, load_holds(out / "holds.json")[0], hidden=(32,))  # right toe
+    assert main(["contacts", str(path), "--out", str(out)]) == 0
+    assert load_json(out / "contacts.json")["attempts"][0]["sequence"]["RF"] == []
+    assert "RF: -" in capsys.readouterr().out
+
+
+def test_contacts_refuses_mismatched_inputs(climb_video, wall, tmp_path, capsys):
+    path, _ = climb_video
+    out = tmp_path / "out"
+    assert main(["contacts", str(path), "--out", str(out)]) == 1
+    assert "run `beta holds" in capsys.readouterr().err  # nothing there yet
+    assert main(["holds", str(path), "--color", "green", "--out", str(out)]) == 0
+    assert main(["contacts", str(path), "--out", str(out)]) == 1
+    assert "run `beta pose" in capsys.readouterr().err
+    scripted_pose(out, path, load_holds(out / "holds.json")[0])
+    doc = load_json(out / "holds.json")
+    doc["camera"]["id"] = "000000000000"
+    save_json(out / "holds.json", doc)
+    assert main(["contacts", str(path), "--out", str(out)]) == 1
+    assert "different camera.json" in capsys.readouterr().err
+    src = imwrite(tmp_path / "wall.png", wall[0])
+    assert main(["holds", str(src), "--color", "green", "--out", str(out)]) == 0
+    assert main(["contacts", str(path), "--out", str(out)]) == 1
+    assert "made from an image" in capsys.readouterr().err

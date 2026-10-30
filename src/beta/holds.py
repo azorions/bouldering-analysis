@@ -100,7 +100,7 @@ MIN_AREA_FLOOR_PX = 16.0
 
 @dataclass(frozen=True)
 class HoldSpec:
-    """What to detect and how. Size settings are fractions of the image."""
+    """What to detect and how. Size settings are fractions of the image (of one video frame for a wall view)."""
 
     color: str
     ranges: tuple[HSVRange, ...]
@@ -174,18 +174,22 @@ class HoldDetection:
     rejected: list[Rejected]
     spec: HoldSpec
     kernels: dict[str, int] = field(default_factory=dict)  # actual blur/open/close sizes in px
+    frame_size: tuple[int, int] | None = None  # (width, height) the size fractions refer to; None = the image's
 
     def rejected_counts(self) -> dict[str, int]:
         counts = Counter(r.reason for r in self.rejected)
         return {"too_small": counts.get("too_small", 0), "too_large": counts.get("too_large", 0)}
 
+    def _size(self) -> tuple[int, int]:
+        return self.frame_size or (self.mask.shape[1], self.mask.shape[0])
+
     @property
     def min_area_px(self) -> float:
-        return self.spec.min_area_px(self.mask.shape[1], self.mask.shape[0])
+        return self.spec.min_area_px(*self._size())
 
     @property
     def max_area_px(self) -> float:
-        return self.spec.max_area_px(self.mask.shape[1], self.mask.shape[0])
+        return self.spec.max_area_px(*self._size())
 
     def near_limit(self, fraction: float = 0.5) -> list[Rejected]:
         """Too-small blobs of at least ``fraction`` of the minimum hold area, largest first.
@@ -229,10 +233,16 @@ def number_holds(holds: list[Hold]) -> list[Hold]:
     return [replace(h, id=i) for i, h in enumerate(ordered, start=1)]
 
 
-def detect_holds(image_bgr: np.ndarray, spec: HoldSpec) -> HoldDetection:
-    """Find the holds matching ``spec`` in a BGR image of the wall."""
+def detect_holds(image_bgr: np.ndarray, spec: HoldSpec, frame_size: tuple[int, int] | None = None) -> HoldDetection:
+    """Find the holds matching ``spec`` in a BGR image of the wall.
+
+    ``frame_size`` is the (width, height) that ``spec``'s size fractions are
+    relative to, when that isn't the image: a moving camera's wall view is
+    bigger than one video frame, but a hold in it is as big as in the frame.
+    """
     height, width = image_bgr.shape[:2]
-    d = min(height, width)
+    ref_w, ref_h = frame_size or (width, height)
+    d = min(ref_h, ref_w)
     kernels = {
         "blur_px": odd_kernel(spec.blur_frac, d),
         "open_px": odd_kernel(spec.open_frac, d),
@@ -252,10 +262,10 @@ def detect_holds(image_bgr: np.ndarray, spec: HoldSpec) -> HoldDetection:
         mask &= roi_mask
     mask = clean_mask(mask, kernels["open_px"], kernels["close_px"])
 
-    # Area limits are relative to the whole image, not the ROI: a hold's size
-    # on screen doesn't depend on how much of the wall you crop to.
-    min_area = spec.min_area_px(width, height)
-    max_area = spec.max_area_px(width, height)
+    # Area limits are relative to the whole frame, not the ROI or the wall view:
+    # a hold's size on screen doesn't depend on how much of the wall is shown.
+    min_area = spec.min_area_px(ref_w, ref_h)
+    max_area = spec.max_area_px(ref_w, ref_h)
 
     # RETR_TREE returns every outline with its nesting: blob outlines sit at
     # even depths (0, 2, ...) and the holes in them at odd depths. contourArea
@@ -312,7 +322,7 @@ def detect_holds(image_bgr: np.ndarray, spec: HoldSpec) -> HoldDetection:
             )
         )
 
-    return HoldDetection(number_holds(kept), mask, rejected, spec, kernels)
+    return HoldDetection(number_holds(kept), mask, rejected, spec, kernels, frame_size)
 
 
 @dataclass(frozen=True)
@@ -516,10 +526,12 @@ def hold_from_dict(d: dict[str, Any]) -> Hold:
     )
 
 
-def detection_to_dict(det: HoldDetection, source: dict[str, Any]) -> dict[str, Any]:
+def detection_to_dict(det: HoldDetection, source: dict[str, Any], camera: dict[str, Any] | None = None) -> dict[str, Any]:
+    """``camera`` (from ``align.camera_ref``) records which wall coordinates the polygons are in."""
     spec = det.spec
     return {
         "source": source,
+        **({"camera": camera} if camera is not None else {}),
         "params": {
             "color": spec.color,
             "hsv_ranges": [{"lower": list(r.lower), "upper": list(r.upper)} for r in spec.ranges],
@@ -539,8 +551,8 @@ def detection_to_dict(det: HoldDetection, source: dict[str, Any]) -> dict[str, A
     }
 
 
-def save_holds(path: str | Path, det: HoldDetection, source: dict[str, Any]) -> Path:
-    return save_json(path, detection_to_dict(det, source))
+def save_holds(path: str | Path, det: HoldDetection, source: dict[str, Any], camera: dict[str, Any] | None = None) -> Path:
+    return save_json(path, detection_to_dict(det, source, camera))
 
 
 def load_holds(path: str | Path) -> tuple[list[Hold], dict[str, Any]]:

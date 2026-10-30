@@ -24,7 +24,7 @@ from __future__ import annotations
 import hashlib
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -32,8 +32,9 @@ from typing import Any
 import cv2
 import numpy as np
 
+from beta.holds import FONT, Hold, put_label
 from beta.jsonio import load_json, save_json
-from beta.video import VideoInfo, iter_frames, probe, read_frame, sample_indices
+from beta.video import VideoInfo, iter_frames, probe, read_frame, read_frames, sample_indices
 
 # Feature work runs on a copy downscaled to this long side, so its cost doesn't
 # grow with resolution; transforms are scaled back to full-resolution pixels.
@@ -449,6 +450,81 @@ def estimate_camera(
         "seconds": round(time.perf_counter() - started, 2),
     }
     return CameraTrack("moving", info.fps, len(fits), info.width, info.height, canvas, ref, transforms, summary)
+
+
+# --- debug video ------------------------------------------------------------
+
+VIDEO_MAX_WIDTH = 1280  # downscaled to this, like pose_debug.mp4, to keep the file small
+BACKDROP_BRIGHTNESS = 0.4
+TEXT_COLOR = (235, 235, 235)
+LOST_COLOR = (0, 0, 255)  # red
+
+
+def _draw_holds(img: np.ndarray, holds: Sequence[Hold], sx: float, sy: float) -> None:
+    """Hold outlines and numbers, straight in (scaled) wall coordinates."""
+    for hold in holds:
+        pts = (np.asarray(hold.polygon, np.float64).reshape(-1, 2) * (sx, sy)).round().astype(np.int32)
+        cv2.polylines(img, [pts], True, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.polylines(img, [pts], True, (255, 255, 255), 1, cv2.LINE_AA)
+        put_label(img, str(hold.id), (hold.centroid[0] * sx, hold.centroid[1] * sy), 0.4)
+
+
+def write_align_video(video_path: str | Path, cam: CameraTrack, out_path: str | Path, holds: Sequence[Hold] = ()) -> Path:
+    """Every frame warped into wall coordinates over a faded copy of the reference view, as .mp4.
+
+    If the alignment is right the wall stands still and only the climber
+    moves; a bad matrix shows up as the wall jumping, or the frame sliding over
+    the backdrop. Lost frames show only the backdrop, with LOST in red.
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cw, ch = cam.canvas
+    s = min(1.0, VIDEO_MAX_WIDTH / cw)
+    # Most players reject odd frame sizes in mp4.
+    size = (max(2, round(cw * s)) // 2 * 2, max(2, round(ch * s)) // 2 * 2)
+    sx, sy = size[0] / cw, size[1] / ch
+    # The downscale is folded into each frame's matrix, so every frame is warped once,
+    # straight to the output size, instead of to the (up to 2x frame size) canvas first.
+    to_out = np.diag([sx, sy, 1.0])
+
+    def warp(image: np.ndarray, m: np.ndarray, flags: int = cv2.INTER_LINEAR) -> np.ndarray:
+        return cv2.warpPerspective(image, to_out @ m, size, flags=flags, borderMode=cv2.BORDER_CONSTANT)
+
+    backdrop = np.zeros((size[1], size[0], 3), np.uint8)
+    ref = 0 if cam.reference_frame is None else cam.reference_frame
+    m_ref = cam.frame_to_wall(ref)
+    # Read sequentially, not by seeking: a seek can land a frame or two away on phone
+    # video, and that frame warped with the reference's matrix would sit slightly off.
+    ref_frames = read_frames(video_path, [ref]) if m_ref is not None else []
+    if ref_frames:
+        backdrop = (warp(ref_frames[0][1], m_ref) * BACKDROP_BRIGHTNESS).astype(np.uint8)
+
+    writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), cam.fps, size)
+    if not writer.isOpened():
+        raise ValueError(f"OpenCV could not open a video writer for {out_path}")
+    try:
+        for i, frame in iter_frames(video_path):
+            img = backdrop.copy()
+            m = cam.frame_to_wall(i)
+            if m is not None:
+                # Nearest-neighbour keeps the footprint mask strictly 0/255 at its edge.
+                covered = warp(np.full(frame.shape[:2], 255, np.uint8), m, cv2.INTER_NEAREST) > 0
+                img[covered] = warp(frame, m)[covered]
+            if holds:
+                _draw_holds(img, holds, sx, sy)
+            t = cam.transforms[i] if i < len(cam.transforms) else None  # none for a still camera
+            if m is None:
+                text, color = f"frame {i}  LOST", LOST_COLOR
+            elif t is None:
+                text, color = f"frame {i}", TEXT_COLOR
+            else:
+                text, color = f"frame {i}  {t.method}  {t.inliers} inliers", TEXT_COLOR
+            img[:32] = (img[:32] * 0.35).astype(np.uint8)  # a darkened band, as in pose_debug.mp4
+            cv2.putText(img, text, (10, 22), FONT, 0.55, color, 1, cv2.LINE_AA)
+            writer.write(img)
+    finally:
+        writer.release()
+    return out_path
 
 
 # --- JSON -------------------------------------------------------------------

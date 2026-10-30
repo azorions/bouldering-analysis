@@ -37,6 +37,7 @@ from typing import IO, Any
 import cv2
 import numpy as np
 
+from beta.align import CameraTrack, apply_h
 from beta.holds import FONT, Hold, put_label
 from beta.jsonio import load_json, save_json
 from beta.video import iter_frames
@@ -274,33 +275,48 @@ def _faint(color: BGR) -> BGR:
     return tuple(int(c * 0.4) for c in color)  # type: ignore[return-value]
 
 
-def _draw_holds(img: np.ndarray, holds: Sequence[Hold], sx: float, sy: float) -> None:
-    """Hold outlines and numbers, blended in at 60% so the skeleton stands out on top."""
+def _draw_holds(img: np.ndarray, holds: Sequence[Hold], sx: float, sy: float, wall_to_frame: np.ndarray | None = None) -> None:
+    """Hold outlines and numbers, blended in at 60% so the skeleton stands out on top.
+
+    ``wall_to_frame`` maps hold coordinates (wall view) into this frame first.
+    """
     layer = img.copy()
     for hold in holds:
-        pts = (np.asarray(hold.polygon, np.float64).reshape(-1, 2) * (sx, sy)).round().astype(np.int32)
+        poly = np.asarray(hold.polygon, np.float64).reshape(-1, 2)
+        center = np.array([hold.centroid], np.float64)
+        if wall_to_frame is not None:
+            poly, center = apply_h(wall_to_frame, poly), apply_h(wall_to_frame, center)
+            if not (np.isfinite(poly).all() and np.isfinite(center).all()):
+                continue
+        pts = (poly * (sx, sy)).round().astype(np.int32)
         cv2.polylines(layer, [pts], True, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.polylines(layer, [pts], True, HOLD_COLOR, 1, cv2.LINE_AA)
-        put_label(layer, str(hold.id), (hold.centroid[0] * sx, hold.centroid[1] * sy), 0.4)
+        put_label(layer, str(hold.id), (center[0, 0] * sx, center[0, 1] * sy), 0.4)
     cv2.addWeighted(layer, 0.6, img, 0.4, 0, dst=img)
 
 
 def draw_pose(
-    frame_bgr: np.ndarray, pose: PoseFrame | None, holds: Sequence[Hold] = (), size: tuple[int, int] | None = None
+    frame_bgr: np.ndarray,
+    pose: PoseFrame | None,
+    holds: Sequence[Hold] = (),
+    size: tuple[int, int] | None = None,
+    wall_to_frame: np.ndarray | None = None,
 ) -> np.ndarray:
     """One debug video frame: faint hold outlines, then the skeleton.
 
     Left side blue, right side orange, so a left/right swap (common when the
     climber faces the wall) shows up as the colors jumping between limbs.
     Joints MediaPipe isn't sure are visible are drawn faint. ``size`` is the
-    output (width, height), by default the frame's own size.
+    output (width, height), by default the frame's own size. ``wall_to_frame``
+    maps the holds' wall coordinates into this frame (a moving camera); None
+    means they are frame pixels already.
     """
     height, width = frame_bgr.shape[:2]
     size = size or (width, height)
     sx, sy = size[0] / width, size[1] / height
     img = cv2.resize(frame_bgr, size, interpolation=cv2.INTER_AREA) if size != (width, height) else frame_bgr.copy()
     if holds:
-        _draw_holds(img, holds, sx, sy)
+        _draw_holds(img, holds, sx, sy, wall_to_frame)
 
     found = pose is not None and pose.landmarks is not None
     lines = [] if pose is None else [f"frame {pose.frame}  {pose.t_ms / 1000:.2f} s"]
@@ -339,8 +355,15 @@ def draw_pose(
     return img
 
 
-def write_pose_video(video_path: str | Path, track: PoseTrack, out_path: str | Path, holds: Sequence[Hold] = ()) -> Path:
-    """Draw every frame of the clip with its pose and write it as .mp4."""
+def write_pose_video(
+    video_path: str | Path, track: PoseTrack, out_path: str | Path, holds: Sequence[Hold] = (), camera: CameraTrack | None = None
+) -> Path:
+    """Draw every frame of the clip with its pose and write it as .mp4.
+
+    With a ``camera``, holds are in its wall coordinates and are mapped into
+    each frame, so they stay on the real holds while the phone moves. Frames
+    the alignment lost get no holds rather than holds in the wrong place.
+    """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     s = min(1.0, VIDEO_MAX_WIDTH / track.width)
@@ -352,7 +375,9 @@ def write_pose_video(video_path: str | Path, track: PoseTrack, out_path: str | P
     poses = {p.frame: p for p in track.frames}
     try:
         for i, frame in iter_frames(video_path):
-            writer.write(draw_pose(frame, poses.get(i), holds, size=size))
+            to_frame = None if camera is None else camera.wall_to_frame(i)
+            shown = holds if camera is None or to_frame is not None else ()
+            writer.write(draw_pose(frame, poses.get(i), shown, size=size, wall_to_frame=to_frame))
     finally:
         writer.release()
     return out_path

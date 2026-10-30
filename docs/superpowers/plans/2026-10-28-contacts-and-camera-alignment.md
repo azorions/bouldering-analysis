@@ -129,7 +129,7 @@ These failure modes are implied by the spec but not covered by any of its tests.
   - `camera_ref(cam) -> dict`: `{"id", "mode", "canvas": [w, h]}`, which goes into `holds.json`.
   - `save_camera(path, cam, source) -> Path`, `load_camera(path) -> tuple[CameraTrack, dict]`.
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_align.py`
+- [x] **Step 1: Write the failing tests** in `tests/test_align.py`
 
 ```python
 import numpy as np
@@ -187,12 +187,12 @@ def test_camera_json_round_trip_keeps_the_id(tmp_path):
     assert still.mode == "still" and np.array_equal(still.frame_to_wall(4), np.eye(3))
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_align.py -v`
 Expected: FAIL, `ModuleNotFoundError: No module named 'beta.align'`
 
-- [ ] **Step 3: Implement the Task 1 interfaces in `src/beta/align.py`**
+- [x] **Step 3: Implement the Task 1 interfaces in `src/beta/align.py`**
 
 - Module docstring: explain wall coordinates and why a homography fits a handheld phone. A camera that rotates about its own center maps every image point by one homography, whatever its depth.
 - `warp_to_wall`:
@@ -201,12 +201,12 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'beta.align'`
 - `save_camera` writes matrices at full float precision, so `load_camera` restores them exactly and the id survives a round trip. It also writes `"id"`. `indent=None`, like `pose.json`.
 - JSON shape: `{source, params, id, mode, reference_frame, canvas: [w, h], fps, frame_count, width, height, frames: [{frame, matrix | null, method, inliers}], summary}`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_align.py -v`
 Expected: 7 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/align.py tests/test_align.py
@@ -243,7 +243,7 @@ git commit -m "feat(align): add camera track data and camera.json"
   - `synthetic.make_moving_climb_video(path, width=640, height=480, n_frames=45, fps=15.0, seed=0, tilt_frac=0.2, blank_frames=(), climber_frac=1.0) -> MovingTruth`.
   - conftest: a session fixture `moving_video -> (path, MovingTruth)`, with 640x480, 45 frames, 15 fps.
 
-- [ ] **Step 1: Add `make_moving_climb_video`** to `src/beta/synthetic.py`
+- [x] **Step 1: Add `make_moving_climb_video`** to `src/beta/synthetic.py`
 
 - Render `make_wall(width, round(height * (1 + tilt_frac)) + 2, seed)` once.
 - Each frame is `cv2.warpPerspective(big_wall, M_t, (width, height))`, with a smooth path like the real clip:
@@ -256,7 +256,7 @@ git commit -m "feat(align): add camera track data and camera.json"
 - Write MJPG `.avi`.
 - This is test-support code, so it has no separate test; the Task 2 tests exercise it.
 
-- [ ] **Step 2: Write the failing tests** (append to `tests/test_align.py`; add `moving_video` to conftest)
+- [x] **Step 2: Write the failing tests** (append to `tests/test_align.py`; add `moving_video` to conftest)
 
 ```python
 from beta.align import STILL_TOL_PX, check_still, estimate_camera
@@ -325,12 +325,12 @@ def test_alignment_scales_back_from_working_size(tmp_path):  # Review Focus 3
     assert cam.canvas[0] >= 1600 and max(frame_errors(cam, truth)) <= 1.5  # 1 working px is ~1.6 full-res px
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_align.py -v`
 Expected: the new tests FAIL with `ImportError: cannot import name 'check_still'`. The Task 1 tests still pass.
 
-- [ ] **Step 4: Implement `check_still` and `estimate_camera`**
+- [x] **Step 4: Implement `check_still` and `estimate_camera`**
 
 All feature work is done on grayscale copies scaled by `s = min(1, ALIGN_MAX_SIDE / max(w, h))`. The full-resolution transform is `S⁻¹·H·S`, with `S = diag(s, s, 1)`. Matching uses:
 - SIFT with `nfeatures=2000`, a ratio test at 0.75 and a BF L2 kNN matcher.
@@ -366,17 +366,17 @@ lost -> matrix None, method "lost", H_prev = None (forces an anchor attempt next
 - The climber moves differently from the wall, so RANSAC rejects matches on the climber. Comment on this where you match.
 - `progress(i + 1)` is called after each frame, if given.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_align.py -v`
 Expected: 15 passed. The long-clip test may take a few seconds.
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `uv run pytest`
 Expected: all pass
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/beta/align.py src/beta/synthetic.py tests/conftest.py tests/test_align.py
@@ -402,7 +402,7 @@ git commit -m "feat(align): estimate camera movement with tracked points and anc
   - `cli._video_source(path, info) -> dict`: `{"path", "kind": "video", "fps", "frame_count", "width", "height", "bit_depth"}`, with the header frame count.
   - `cli._print_camera(cam) -> None`.
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/test_cli.py`)
+- [x] **Step 1: Write the failing tests** (append to `tests/test_cli.py`)
 
 ```python
 from beta.align import load_camera
@@ -431,12 +431,12 @@ def test_align_no_video_and_bad_options(moving_video, tmp_path, capsys):
         main(["align", "clip.mp4", "--anchor-every", "0"])
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_cli.py -k align -v`
 Expected: FAIL (`invalid choice: 'align'`)
 
-- [ ] **Step 3: Implement the Task 3 interfaces**
+- [x] **Step 3: Implement the Task 3 interfaces**
 
 **`write_align_video`**
 - Size and codec as in `pose.write_pose_video`: scaled to ≤ 1280 px wide, even dimensions, `mp4v`.
@@ -476,12 +476,12 @@ Camera moves: up to {max_shift:.0f} px from frame {ref}'s view
   - the camera may be still or handheld;
   - alignment fails when the filmer walks far sideways, or when the climber fills the frame.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_cli.py -k align -v`
 Expected: 3 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/align.py src/beta/cli.py src/beta/video.py README.md tests/test_cli.py
@@ -510,7 +510,7 @@ git commit -m "feat(cli): add the align command and its debug video"
   - `holds.detection_to_dict(det, source, camera: dict | None = None)` and `holds.save_holds(path, det, source, camera=None)`. When `camera` is given, the output gains a `"camera"` key.
   - `cli._camera_for(path, out_dir, info) -> CameraTrack`. It reuses `out_dir/camera.json` when its `source` has the same file name, header frame count, width and height. Otherwise it prints `Checking whether the camera moves ...`, estimates, saves, and calls `_print_camera`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/test_video.py`:
 
@@ -574,12 +574,12 @@ def test_holds_on_image_has_no_camera(wall, tmp_path):
     assert not (tmp_path / "o" / "camera.json").exists()
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_video.py tests/test_cli.py -k "read_frames or masked or holds_on or redo" -v`
 Expected: FAIL (`ImportError: masked_median`, and `KeyError: 'camera'`)
 
-- [ ] **Step 3: Implement the Task 4 interfaces**
+- [x] **Step 3: Implement the Task 4 interfaces**
 
 **`masked_median`**
 - Stack the images as float32, with NaN where the mask is 0.
@@ -602,12 +602,12 @@ Expected: FAIL (`ImportError: masked_median`, and `KeyError: 'camera'`)
 
 **`README.md` section 1:** for videos, `holds` checks whether the camera moved and aligns the frames first. Holds are numbered on the aligned wall view.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_video.py tests/test_cli.py -v`
 Expected: all pass, including the existing `test_holds_on_video_uses_median_background`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/video.py src/beta/holds.py src/beta/cli.py README.md tests/test_video.py tests/test_cli.py
@@ -632,7 +632,7 @@ git commit -m "feat(holds): detect holds on camera-aligned frames"
     - Holds with a moving `camera` key load `camera.json` from the same folder.
     - If it's missing or its id differs, print `warning: {path} was made with a different camera.json (run `beta holds` again), so its holds are not drawn` and return `([], None)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/test_pose.py`:
 
@@ -674,23 +674,23 @@ def test_pose_skips_holds_from_another_alignment(moving_video, tmp_path, monkeyp
          # `pose` prints "was made with a different camera.json" on stderr and passes holds == []
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_pose.py tests/test_cli.py -k "camera or lost or alignment or draws_holds" -v`
 Expected: FAIL (`unexpected keyword argument 'wall_to_frame'`)
 
-- [ ] **Step 3: Implement the Task 5 interfaces**
+- [x] **Step 3: Implement the Task 5 interfaces**
 
 - `_draw_holds` maps the polygon and centroid through `wall_to_frame` with `apply_h` before scaling by `(sx, sy)`.
 - `cmd_pose` unpacks `holds, camera = _overlay_holds(...)` and passes `camera` to `write_pose_video`.
 - For holds without a `camera` key (made from an image), keep the existing size check.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest`
 Expected: all pass
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/pose.py src/beta/cli.py tests/test_pose.py tests/test_cli.py
@@ -703,7 +703,7 @@ git commit -m "feat(pose): draw holds where a moving camera sees them"
 
 No code. Stop here and work through it with the user.
 
-- [ ] **Step 1: Align**
+- [x] **Step 1: Align**
 
 Run: `uv run beta align samples/bouldering_video_sample.mp4`
 Expected:
@@ -714,7 +714,7 @@ Expected:
 
 Open `outputs/bouldering_video_sample/align_debug.mp4`. The wall should stand still.
 
-- [ ] **Step 2: Holds**
+- [x] **Step 2: Holds**
 
 Run: `uv run beta holds samples/bouldering_video_sample.mp4 --color white`
 Expected: `holds_debug.png` is sharp, not smeared.
@@ -723,12 +723,12 @@ With the user, tune with `--sample X,Y` (pixels in `background.png`) and `--roi`
 - False holds on the lit ceiling don't matter.
 - Missing parts of touched holds do.
 
-- [ ] **Step 3: Pose debug with aligned holds**
+- [x] **Step 3: Pose debug with aligned holds**
 
 Run: `uv run beta pose samples/bouldering_video_sample.mp4` (about 1.5 min)
 Expected: in `pose_debug.mp4` the hold outlines stay on the holds while the camera moves.
 
-- [ ] **Step 4: The user writes the answer key** to `samples/bouldering_video_sample.truth.json` (gitignored, like the clip)
+- [x] **Step 4: The user writes the answer key** to `samples/bouldering_video_sample.truth.json` (gitignored, like the clip)
 
 ```json
 {"holds_command": "beta holds ... (the exact tuned command)", "top_hold": 0,
@@ -737,7 +737,7 @@ Expected: in `pose_debug.mp4` the hold outlines stay on the holds while the came
 
 Use the hold numbers from `holds_debug.png`.
 
-- [ ] **Step 5: Ask the user** whether CLAUDE.md's "Assume a static camera for now" line should change. CLAUDE.md is theirs, so don't edit it unasked. Get sign-off before Task 7.
+- [x] **Step 5: Ask the user** whether CLAUDE.md's "Assume a static camera for now" line should change. CLAUDE.md is theirs, so don't edit it unasked. Get sign-off before Task 7.
 
 ---
 
@@ -775,7 +775,7 @@ Use the hold numbers from `holds_debug.png`.
       - Visibility is `vis`, presence 0.95.
     - `track_of(frames: list[np.ndarray | None], fps=30.0, width=640, height=480) -> PoseTrack`.
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_limbs.py`
+- [x] **Step 1: Write the failing tests** in `tests/test_limbs.py`
 
 ```python
 import numpy as np, pytest
@@ -857,12 +857,12 @@ def test_hip_centers():
     assert np.allclose(hip_centers(body(HANDS, FEET)[None])[0], (250, 300))
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_limbs.py -v`
 Expected: FAIL (`ModuleNotFoundError: beta.limbs`)
 
-- [ ] **Step 3: Implement `src/beta/limbs.py`**
+- [x] **Step 3: Implement `src/beta/limbs.py`**
 
 **Left/right pairs** (left, right):
 - Face: (1,4), (2,5), (3,6), (7,8), (9,10).
@@ -884,12 +884,12 @@ Expected: FAIL (`ModuleNotFoundError: beta.limbs`)
 
 The docstring explains why: MediaPipe confuses sides on climbers seen from behind.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_limbs.py -v`
 Expected: 12 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/limbs.py tests/conftest.py tests/test_limbs.py
@@ -921,7 +921,7 @@ git commit -m "feat(contacts): add hand and foot points with a left/right fix"
   - `busy_frames(contacts: list[Contact], frame_count) -> np.ndarray` (F,) bool.
   - conftest: `square_hold(id, x, y, size=40) -> Hold`, a square with its top-left corner at (x, y).
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_contacts.py`
+- [x] **Step 1: Write the failing tests** in `tests/test_contacts.py`
 
 ```python
 import numpy as np, pytest
@@ -997,12 +997,12 @@ def test_hold_distances_are_signed():
     assert d[0, 0] == pytest.approx(0.2) and d[1, 0] == pytest.approx(-0.1) and np.isnan(d[2, 0])
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_contacts.py -v`
 Expected: FAIL (`ModuleNotFoundError: beta.contacts`)
 
-- [ ] **Step 3: Implement `detect_contacts`**
+- [x] **Step 3: Implement `detect_contacts`**
 
 The tests don't settle the onset backdating, so it is pinned here. It refines the spec's "backdated to the first frame of the run" so the start is when the hand arrived. The speed window still sees the reach for about 0.1 s after the hand lands, so the first slow frame comes slightly later.
 
@@ -1022,12 +1022,12 @@ end of clip: an open contact ends at last_confirmed_inside
 
 The docstring states: speed never releases a contact, because hands rotate and slide on holds.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_contacts.py -v`
 Expected: 13 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/contacts.py tests/conftest.py tests/test_contacts.py
@@ -1055,7 +1055,7 @@ git commit -m "feat(contacts): detect when each limb is on a hold"
   - `feet_on_floor(feet, feet_seen, feet_busy (F,2), floor_y, torso) -> (F,2) bool`.
   - `find_attempts(contacts: dict[str, list[Contact]], on_floor: np.ndarray | None, hips (F,2), holds, torso, fps, top_hold: int | None = None) -> list[Attempt]`.
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_attempts.py`
+- [x] **Step 1: Write the failing tests** in `tests/test_attempts.py`
 
 These use direct arrays at 30 fps with torso 100. Holds come from `square_hold`, ids 1–20, placed so that a higher id is higher on the wall. Hold 20 is the top. Every hold's bbox bottom is ≤ 850.
 
@@ -1147,12 +1147,12 @@ def test_single_attempt_without_a_floor():
     assert len(a) == 1 and a[0].start_frame == 40 and a[0].outcome == "clip_ended"
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_attempts.py -v`
 Expected: FAIL (`ModuleNotFoundError: beta.attempts`)
 
-- [ ] **Step 3: Implement `src/beta/attempts.py`**
+- [x] **Step 3: Implement `src/beta/attempts.py`**
 
 Put the reasoning for each heuristic in its docstring.
 
@@ -1196,12 +1196,12 @@ high_point: max hold id among hand contacts; fall.last_holds: per limb, the hold
 end >= fall_frame - LAST_HOLDS_S*fps and start <= fall_frame; release_order: those contacts by end frame
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_attempts.py -v`
 Expected: 13 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/beta/attempts.py tests/test_attempts.py
@@ -1227,7 +1227,7 @@ git commit -m "feat(contacts): split the clip into attempts and describe falls"
   - `save_contacts(path, result, source, inputs, params) -> Path`.
   - `draw_contacts_debug(result, holds, background=None) -> np.ndarray`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/test_contacts.py`, with a scripted climb at 30 fps on square holds in 640x480. Holds 1–2 are the feet holds and 3–5 the hand holds.
 
@@ -1337,12 +1337,12 @@ def test_contacts_refuses_mismatched_inputs(climb_video, wall, tmp_path, capsys)
     assert "made from an image" in capsys.readouterr().err
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_contacts.py tests/test_cli.py -k "analyze or camera_motion or json_shape or debug_image or contacts" -v`
 Expected: FAIL (`ImportError: cannot import name 'analyze'`)
 
-- [ ] **Step 3: Implement `analyze`, the JSON functions and `draw_contacts_debug`**
+- [x] **Step 3: Implement `analyze`, the JSON functions and `draw_contacts_debug`**
 
 **`analyze`**, in order:
 1. `wall_landmarks`
@@ -1366,7 +1366,7 @@ Expected: FAIL (`ImportError: cannot import name 'analyze'`)
   - The floor line is drawn in yellow when it is known.
 - **Header:** torso px, the floor and its source, and the outcome of each attempt.
 
-- [ ] **Step 4: Implement `cmd_contacts` and the parser**
+- [x] **Step 4: Implement `cmd_contacts` and the parser**
 
 **Inputs:** `--pose`, `--holds` and `--camera` default to `out_dir/{pose,holds,camera}.json`. The checks, in order, each fail with a `ValueError` whose message names the command to run:
 
@@ -1413,12 +1413,12 @@ Wrote:
 
 **`README.md` section 3:** cover the command, the outputs, how to read `contacts_debug.png`, the options, and the known risks from the spec (hidden hands, ceiling false holds needing `--top-hold`).
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest`
 Expected: all pass
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/beta/contacts.py src/beta/cli.py README.md tests/test_contacts.py tests/test_cli.py
@@ -1433,7 +1433,7 @@ git commit -m "feat(cli): add the contacts command, contacts.json and the timeli
 - Modify (only if tuning is needed): `src/beta/contacts.py` (`ContactParams` defaults), `src/beta/attempts.py` (constants)
 - Modify: `docs/superpowers/specs/2026-10-28-contacts-and-camera-alignment-design.md` (append a "Tuning log")
 
-- [ ] **Step 1: Run contacts on the real clip**
+- [x] **Step 1: Run contacts on the real clip**
 
 Run: `uv run beta contacts samples/bouldering_video_sample.mp4 --top-hold <top_hold from the truth file>`
 
@@ -1442,7 +1442,7 @@ Expected:
 - Nothing counted after the fall.
 - Each limb's sequence equals `samples/bouldering_video_sample.truth.json`.
 
-- [ ] **Step 2: Diagnose each mismatch with `contacts_debug.png` and `pose_debug.mp4`**
+- [x] **Step 2: Diagnose each mismatch with `contacts_debug.png` and `pose_debug.mp4`**
 
 For each mismatch, find which of these caused it:
 - a grey (unseen) stretch;
@@ -1451,16 +1451,16 @@ For each mismatch, find which of these caused it:
 
 Change a threshold only when that is the cause. Then rerun `uv run pytest`, since the defaults are pinned in tests, so update those tests together with the default.
 
-- [ ] **Step 3: Record each change**
+- [x] **Step 3: Record each change**
 
 Append a `## Tuning log` section to the design doc. Each entry gives the date, the setting, the old and new value, the evidence (frame numbers and what the debug output showed) and the reason.
 
-- [ ] **Step 4: Check the timing goals**
+- [x] **Step 4: Check the timing goals**
 
 - In the Task 6 `beta align` output, the moving clip should show ≤ ~25 ms per frame.
 - Run `uv run beta align samples/synthetic_climb.avi`. Expected: `Camera is still`, taking about 2 s or less.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A src docs tests
